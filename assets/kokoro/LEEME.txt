@@ -1,0 +1,29 @@
+====================================================================
+ VOZ DE YUE CON KOKORO TTS  ·  pon aqui los 2 archivos del modelo
+====================================================================
+
+Kokoro es una voz neuronal que funciona SIN internet, pero necesita
+descargar 2 archivos UNA sola vez. Ponlos en esta misma carpeta
+(assets/kokoro/):
+
+  1) kokoro-v1.0.onnx     (~310 MB)
+  2) voices-v1.0.bin      (~27 MB)
+
+Descarga (oficial, GitHub de kokoro-onnx):
+  https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0
+
+  - kokoro-v1.0.onnx
+  - voices-v1.0.bin
+
+Tambien instala las librerias (una vez):
+  pip install kokoro-onnx soundfile
+
+Listo. Yue hablara con la voz "ef_dora" (femenina, espanol).
+
+Notas:
+- Si NO descargas estos archivos, Yue seguira hablando, pero con la
+  voz de respaldo gTTS (la de antes), hasta que los pongas.
+- Para cambiar la voz o la velocidad, edita el .env:
+    KOKORO_VOICE=ef_dora
+    KOKORO_SPEED=1.06
+- Voces en espanol disponibles: ef_dora (femenina), em_alex, em_santa.

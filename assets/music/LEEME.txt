@@ -1,0 +1,21 @@
+MÚSICA DE FONDO DE LOS RECUERDOS DE YUE
+=======================================
+
+Si dejas tus propios archivos de música aquí, Yue los usará como banda sonora
+de los videos generados, eligiéndolos según tu estado de ánimo.
+
+Pon archivos .mp3 / .wav / .m4a / .ogg en la carpeta de la emoción:
+
+  assets/music/feliz/
+  assets/music/enamorado/
+  assets/music/tranquilo/
+  assets/music/neutral/
+  assets/music/triste/
+  assets/music/estresado/
+  assets/music/enojado/
+
+(También puedes poner archivos sueltos directamente en assets/music/ para
+usarlos con cualquier emoción.)
+
+Si una carpeta está vacía, Yue COMPONE una melodía ambiental suave al vuelo,
+acorde a la emoción. Así siempre habrá música, aunque no añadas nada.

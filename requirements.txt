@@ -1,0 +1,85 @@
+PyQt5>=5.15
+PyQtWebEngine>=5.15
+requests>=2.31
+python-dotenv>=1.0
+pygame>=2.5
+mss>=9.0
+Pillow>=10.0,<12   # <12 por compatibilidad con moviepy (video/YouTube)
+SpeechRecognition>=3.10
+PyAudio>=0.2.13
+numpy>=1.24
+
+# --- Cámara local: rostro, expresiones faciales y postura ---
+opencv-python>=4.10
+mediapipe>=0.10.21,<0.11
+
+pyautogui>=0.9.54
+pyperclip>=1.9
+
+# --- Control por elementos reales de la UI (Windows) ---
+# pywinauto usa el backend "uia" para leer y clicar controles de verdad,
+# en vez de adivinar coordenadas. Solo Windows; en otros SO se ignora.
+pywinauto>=0.6.8; sys_platform == "win32"
+# Office COM, registro y accesos directos
+pywin32>=306; sys_platform == "win32"
+# Respaldo para listar/enfocar ventanas
+pygetwindow>=0.0.9
+# Requerido por el backend UIA de pywinauto
+comtypes>=1.2
+
+# --- OCR de pantalla (accion click_text) ---
+pytesseract>=0.3.10
+# OJO: pytesseract es solo el envoltorio. El binario de Tesseract se instala aparte:
+#   Windows:  winget install UB-Mannheim.TesseractOCR
+#             (o https://github.com/UB-Mannheim/tesseract/wiki)
+#             Marca el paquete de idioma "Spanish" durante la instalacion.
+#             Si no queda en el PATH, pon OCR_TESSERACT_CMD en el .env con la ruta
+#             completa a tesseract.exe
+#   macOS:    brew install tesseract tesseract-lang
+#   Linux:    sudo apt install tesseract-ocr tesseract-ocr-spa
+
+# --- Voz (Kokoro TTS, voz neuronal local) ---
+kokoro-onnx>=0.4.4
+soundfile>=0.12
+
+# --- Voz de respaldo (online) ---
+gTTS>=2.5
+
+# --- Notas ---
+# Kokoro funciona SIN internet, pero necesita 2 archivos de modelo (una sola vez):
+#   kokoro-v1.0.onnx   y   voices-v1.0.bin
+# Descargalos en  assets/kokoro/  (ver README, seccion "Voz con Kokoro").
+#
+# FFmpeg NO es un paquete de Python: instalalo en tu sistema y que este en el PATH
+#   Windows:  winget install Gyan.FFmpeg     (o https://ffmpeg.org/download.html)
+#   macOS:    brew install ffmpeg
+#   Linux:    sudo apt install ffmpeg
+# Para FLUX en local (opcional, requiere GPU): pip install torch diffusers transformers accelerate
+
+# --- Voz principal (Edge-TTS, neuronal en la nube, requiere internet) ---
+edge-tts>=6.1
+
+# --- YUE V3 PERCEPTION SYSTEM (cámara que "ve" a la persona) ---
+# opencv-python y mediapipe ya están arriba. DeepFace y psutil son OPCIONALES:
+# sin DeepFace hay presencia/atención pero NO emociones; sin psutil el perfil de
+# hardware cae a MEDIUM (no autodetecta la gama). El V3 está APAGADO por defecto
+# (VISION_V3_ENABLED=false), así que estos paquetes solo hacen falta si lo activas.
+deepface>=0.0.93
+tf-keras>=2.15   # backend Keras que DeepFace necesita con TensorFlow 2.16+
+psutil>=5.9
+
+# --- Modo Profesora: lectura de PDF/documentos y OCR de PDFs escaneados ---
+# Lectura de texto de PDF (uno de los dos basta; pdfplumber da mejor calidad):
+pdfplumber>=0.11
+pypdf>=4.0
+# Rasterizar páginas para OCR/visión en PDFs escaneados o de imágenes.
+# PyMuPDF es lo RECOMENDADO para el .exe: un solo wheel, SIN binarios del sistema.
+pymupdf>=1.24
+# Alternativa a PyMuPDF (necesita Poppler instalado aparte); opcional:
+# pdf2image>=1.17
+# OCR de páginas escaneadas: reutiliza pytesseract (arriba) + binario de Tesseract.
+# Instala también el idioma español de Tesseract (tesseract-ocr-spa) para mejor OCR.
+# Lectura de otros formatos educativos (opcionales, degradables):
+python-docx>=1.1     # .docx
+python-pptx>=0.6     # .pptx
+ebooklib>=0.18       # .epub (hay respaldo por ZIP si falta)

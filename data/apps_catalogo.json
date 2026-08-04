@@ -1,0 +1,1297 @@
+{
+  "version": 1,
+  "updated_at": 1785779933.8957894,
+  "apps": [
+    {
+      "name": "Access",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\MSACCESS.EXE",
+      "args": "",
+      "source": "start_menu",
+      "key": "access"
+    },
+    {
+      "name": "Add a new TAP virtual ethernet adapter",
+      "target": "C:\\Program Files\\TAP-Windows\\bin\\addtap.bat",
+      "args": "",
+      "source": "start_menu",
+      "key": "add a new tap virtual ethernet adapter"
+    },
+    {
+      "name": "Administrative Tools",
+      "target": "C:\\WINDOWS\\system32\\control.exe",
+      "args": "/name Microsoft.AdministrativeTools",
+      "source": "start_menu",
+      "key": "administrative tools"
+    },
+    {
+      "name": "Android Studio",
+      "target": "C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "android studio"
+    },
+    {
+      "name": "Avast Free Antivirus",
+      "target": "C:\\Program Files\\Avast Software\\Avast\\AvastUI.exe",
+      "source": "uninstall",
+      "key": "avast free antivirus"
+    },
+    {
+      "name": "Ayuda WinRAR",
+      "target": "C:\\Program Files\\WinRAR\\winrar.chm",
+      "args": "",
+      "source": "start_menu",
+      "key": "ayuda winrar"
+    },
+    {
+      "name": "Battle.net",
+      "target": "C:\\Program Files (x86)\\Battle.net\\Battle.net Launcher.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "battle net"
+    },
+    {
+      "name": "Bright VPN",
+      "target": "C:\\Program Files (x86)\\Bright VPN\\Bright VPN.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "bright vpn"
+    },
+    {
+      "name": "Bright VPN 1.566.436",
+      "target": "C:\\Program Files (x86)\\Bright VPN\\uninstallerIcon.ico",
+      "source": "uninstall",
+      "key": "bright vpn 1 566 436"
+    },
+    {
+      "name": "Character Map",
+      "target": "C:\\WINDOWS\\system32\\charmap.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "character map"
+    },
+    {
+      "name": "chrome",
+      "target": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "source": "app_paths",
+      "key": "chrome"
+    },
+    {
+      "name": "Cliente de Riot",
+      "target": "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "cliente de riot"
+    },
+    {
+      "name": "code",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+      "source": "app_paths",
+      "key": "code"
+    },
+    {
+      "name": "Command Prompt",
+      "target": "C:\\WINDOWS\\system32\\cmd.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "command prompt"
+    },
+    {
+      "name": "Component Services",
+      "target": "C:\\WINDOWS\\system32\\comexp.msc",
+      "args": "",
+      "source": "start_menu",
+      "key": "component services"
+    },
+    {
+      "name": "computer",
+      "target": "C:\\Users\\villa\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\computer.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "computer"
+    },
+    {
+      "name": "Computer Management",
+      "target": "C:\\WINDOWS\\system32\\compmgmt.msc",
+      "args": "/s",
+      "source": "start_menu",
+      "key": "computer management"
+    },
+    {
+      "name": "Console",
+      "target": "C:\\Program Files\\Tesseract-OCR\\winpath.exe",
+      "args": "cmd",
+      "source": "start_menu",
+      "key": "console"
+    },
+    {
+      "name": "Control Panel",
+      "target": "C:\\Users\\villa\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\Control Panel.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "control panel"
+    },
+    {
+      "name": "Copilot",
+      "target": "C:\\Program Files (x86)\\Microsoft\\Copilot\\Application\\150.0.4078.96\\mscopilot.exe",
+      "source": "uninstall",
+      "key": "copilot"
+    },
+    {
+      "name": "Debuggable Package Manager",
+      "target": "C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": "-NoExit -Command \"& { Import-Module Appx; Import-Module .\\AppxDebug.dll; Show-AppxDebug}\"",
+      "source": "start_menu",
+      "key": "debuggable package manager"
+    },
+    {
+      "name": "Delete ALL TAP virtual ethernet adapters",
+      "target": "C:\\Program Files\\TAP-Windows\\bin\\deltapall.bat",
+      "args": "",
+      "source": "start_menu",
+      "key": "delete all tap virtual ethernet adapters"
+    },
+    {
+      "name": "Desinstalar Wondershare Filmora 14",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Wondershare\\Wondershare Filmora\\unins000.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "desinstalar wondershare filmora 14"
+    },
+    {
+      "name": "DeskRest",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\DeskRest\\DeskRest.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "deskrest"
+    },
+    {
+      "name": "DeskRest version 1.0.2.1",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\DeskRest\\DeskRest.exe",
+      "source": "uninstall",
+      "key": "deskrest version 1 0 2 1"
+    },
+    {
+      "name": "Developer Command Prompt for VS 2022",
+      "target": "C:\\Windows\\System32\\cmd.exe",
+      "args": "/k \"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat\"",
+      "source": "start_menu",
+      "key": "developer command prompt for vs 2022"
+    },
+    {
+      "name": "Developer PowerShell for VS 2022",
+      "target": "C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": "-noe -c \"&{Import-Module \"\"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\Microsoft.VisualStudio.DevShell.dll\"\"\"; Enter-VsDevShell 2eeaa5f1}\"",
+      "source": "start_menu",
+      "key": "developer powershell for vs 2022"
+    },
+    {
+      "name": "devenv",
+      "target": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\common7\\ide\\devenv.exe",
+      "source": "app_paths",
+      "key": "devenv"
+    },
+    {
+      "name": "dfrgui",
+      "target": "C:\\WINDOWS\\system32\\dfrgui.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "dfrgui"
+    },
+    {
+      "name": "Disk Cleanup",
+      "target": "C:\\WINDOWS\\system32\\cleanmgr.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "disk cleanup"
+    },
+    {
+      "name": "Dokumentation",
+      "target": "C:\\Program Files\\Tesseract-OCR\\tesseract.1.html",
+      "args": "",
+      "source": "start_menu",
+      "key": "dokumentation"
+    },
+    {
+      "name": "Event Viewer",
+      "target": "C:\\WINDOWS\\system32\\eventvwr.msc",
+      "args": "/s",
+      "source": "start_menu",
+      "key": "event viewer"
+    },
+    {
+      "name": "excel",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\EXCEL.EXE",
+      "source": "app_paths",
+      "key": "excel"
+    },
+    {
+      "name": "FAQ",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\FAQ.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "faq"
+    },
+    {
+      "name": "File Explorer",
+      "target": "C:\\Users\\villa\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\File Explorer.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "file explorer"
+    },
+    {
+      "name": "GetHelp",
+      "target": "C:\\Program Files\\WindowsApps\\Microsoft.GetHelp_10.2409.41132.0_x64__8wekyb3d8bbwe\\GetHelp.exe",
+      "source": "app_paths",
+      "key": "gethelp"
+    },
+    {
+      "name": "Git",
+      "target": "C:\\Program Files\\Git\\mingw64\\share\\git\\git-for-windows.ico",
+      "source": "uninstall",
+      "key": "git"
+    },
+    {
+      "name": "Git Bash",
+      "target": "C:\\Program Files\\Git\\git-bash.exe",
+      "args": "--cd-to-home",
+      "source": "start_menu",
+      "key": "git bash"
+    },
+    {
+      "name": "Git CMD",
+      "target": "C:\\Program Files\\Git\\git-cmd.exe",
+      "args": "--cd-to-home",
+      "source": "start_menu",
+      "key": "git cmd"
+    },
+    {
+      "name": "Git GUI",
+      "target": "C:\\Program Files\\Git\\cmd\\git-gui.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "git gui"
+    },
+    {
+      "name": "Git Release Notes",
+      "target": "C:\\Program Files\\Git\\ReleaseNotes.html",
+      "args": "",
+      "source": "start_menu",
+      "key": "git release notes"
+    },
+    {
+      "name": "GitHub",
+      "target": "C:\\Program Files\\Google\\Chrome\\Application\\chrome_proxy.exe",
+      "args": " --profile-directory=Default --app-id=mjoklplbddabcmpepnokjaffbmgbkkgg",
+      "source": "start_menu",
+      "key": "github"
+    },
+    {
+      "name": "Google Chrome",
+      "target": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "source": "uninstall",
+      "key": "google chrome"
+    },
+    {
+      "name": "Homepage",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\Homepage.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "homepage"
+    },
+    {
+      "name": "IDLE (Python 3.12 64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python312\\pythonw.exe",
+      "args": "\"C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\idlelib\\idle.pyw\"",
+      "source": "start_menu",
+      "key": "idle python 3 12 64 bit"
+    },
+    {
+      "name": "IDLE (Python 3.13 64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python313\\pythonw.exe",
+      "args": "\"C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\idlelib\\idle.pyw\"",
+      "source": "start_menu",
+      "key": "idle python 3 13 64 bit"
+    },
+    {
+      "name": "idle3.13",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\idle3.13.exe",
+      "source": "app_paths",
+      "key": "idle3 13"
+    },
+    {
+      "name": "IEDIAG",
+      "target": "C:\\Program Files\\Internet Explorer\\IEDIAGCMD.EXE",
+      "source": "app_paths",
+      "key": "iediag"
+    },
+    {
+      "name": "IEDIAGCMD",
+      "target": "C:\\Program Files\\Internet Explorer\\IEDIAGCMD.EXE",
+      "source": "app_paths",
+      "key": "iediagcmd"
+    },
+    {
+      "name": "IEXPLORE",
+      "target": "C:\\Program Files\\Internet Explorer\\IEXPLORE.EXE",
+      "source": "app_paths",
+      "key": "iexplore"
+    },
+    {
+      "name": "Immersive Control Panel",
+      "target": "C:\\WINDOWS\\System32\\Control.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "immersive control panel"
+    },
+    {
+      "name": "Install Additional Tools for Node.js",
+      "target": "C:\\Windows\\System32\\cmd.exe",
+      "args": "/d /c \"C:\\Program Files\\nodejs\\install_tools.bat\"",
+      "source": "start_menu",
+      "key": "install additional tools for node js"
+    },
+    {
+      "name": "Intel(R) Processor Graphics",
+      "target": "C:\\Program Files (x86)\\Intel\\Intel(R) Processor Graphics\\Uninstall\\Setup.exe",
+      "source": "uninstall",
+      "key": "intel r processor graphics"
+    },
+    {
+      "name": "Internet Explorer",
+      "target": "C:\\Program Files\\Internet Explorer\\iexplore.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "internet explorer"
+    },
+    {
+      "name": "iSCSI Initiator",
+      "target": "C:\\WINDOWS\\system32\\iscsicpl.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "iscsi initiator"
+    },
+    {
+      "name": "javaws",
+      "target": "C:\\Program Files\\Java\\jre1.8.0_451\\bin\\javaws.exe",
+      "source": "app_paths",
+      "key": "javaws"
+    },
+    {
+      "name": "Live2D Cubism 5.3.03",
+      "target": "C:\\Program Files\\Live2D Cubism 5.3\\CubismEditor5.exe",
+      "source": "uninstall",
+      "key": "live2d cubism 5 3 03"
+    },
+    {
+      "name": "Live2D Cubism Editor 5.3",
+      "target": "C:\\Program Files\\Live2D Cubism 5.3\\CubismEditor5.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "live2d cubism editor 5 3"
+    },
+    {
+      "name": "Live2D Cubism Viewer 5.3",
+      "target": "C:\\Program Files\\Live2D Cubism 5.3\\CubismViewer5.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "live2d cubism viewer 5 3"
+    },
+    {
+      "name": "Magnify",
+      "target": "C:\\WINDOWS\\system32\\magnify.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "magnify"
+    },
+    {
+      "name": "Manual RAR para consola",
+      "target": "C:\\Program Files\\WinRAR\\Rar.txt",
+      "args": "",
+      "source": "start_menu",
+      "key": "manual rar para consola"
+    },
+    {
+      "name": "Math Input Panel",
+      "target": "C:\\Program Files\\Common Files\\Microsoft Shared\\Ink\\mip.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "math input panel"
+    },
+    {
+      "name": "Memory Diagnostics Tool",
+      "target": "C:\\WINDOWS\\system32\\MdSched.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "memory diagnostics tool"
+    },
+    {
+      "name": "Microsoft Edge",
+      "target": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\151.0.4129.59\\msedge.exe",
+      "source": "uninstall",
+      "key": "microsoft edge"
+    },
+    {
+      "name": "Microsoft Office LTSC Profesional Plus 2024 - es-es",
+      "target": "C:\\Program Files\\Common Files\\Microsoft Shared\\ClickToRun\\OfficeClickToRun.exe",
+      "source": "uninstall",
+      "key": "microsoft office ltsc profesional plus 2024 es es"
+    },
+    {
+      "name": "Microsoft OneDrive",
+      "target": "C:\\Program Files\\Microsoft OneDrive\\26.129.0706.0003\\OneDriveSetup.exe",
+      "source": "uninstall",
+      "key": "microsoft onedrive"
+    },
+    {
+      "name": "Microsoft Project Profesional 2024 - es-es",
+      "target": "C:\\Program Files\\Common Files\\Microsoft Shared\\ClickToRun\\OfficeClickToRun.exe",
+      "source": "uninstall",
+      "key": "microsoft project profesional 2024 es es"
+    },
+    {
+      "name": "Microsoft Visio LTSC Profesional 2024 - es-es",
+      "target": "C:\\Program Files\\Common Files\\Microsoft Shared\\ClickToRun\\OfficeClickToRun.exe",
+      "source": "uninstall",
+      "key": "microsoft visio ltsc profesional 2024 es es"
+    },
+    {
+      "name": "Microsoft Visual C++ 2013 Redistributable (x64) - 12.0.30501",
+      "target": "C:\\ProgramData\\Package Cache\\{050d4fc8-5d48-4b8f-8972-47c82c46020f}\\vcredist_x64.exe",
+      "source": "uninstall",
+      "key": "microsoft visual c 2013 redistributable x64 12 0 30501"
+    },
+    {
+      "name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211",
+      "target": "C:\\ProgramData\\Package Cache\\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\\VC_redist.x64.exe",
+      "source": "uninstall",
+      "key": "microsoft visual c 2015 2022 redistributable x64 14 44 35211"
+    },
+    {
+      "name": "Microsoft Visual C++ 2015-2022 Redistributable (x86) - 14.40.33810",
+      "target": "C:\\ProgramData\\Package Cache\\{47109d57-d746-4f8b-9618-ed6a17cc922b}\\VC_redist.x86.exe",
+      "source": "uninstall",
+      "key": "microsoft visual c 2015 2022 redistributable x86 14 40 33810"
+    },
+    {
+      "name": "Microsoft Visual Studio Code (User)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+      "source": "uninstall",
+      "key": "microsoft visual studio code user"
+    },
+    {
+      "name": "Microsoft Visual Studio Installer",
+      "target": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\setup.exe",
+      "source": "uninstall",
+      "key": "microsoft visual studio installer"
+    },
+    {
+      "name": "ms-teams",
+      "target": "C:\\Program Files\\WindowsApps\\msteams_24257.205.3165.2029_x64__8wekyb3d8bbwe\\ms-teams.exe",
+      "source": "app_paths",
+      "key": "ms teams"
+    },
+    {
+      "name": "ms-teamsupdate",
+      "target": "C:\\Program Files\\WindowsApps\\msteams_24257.205.3165.2029_x64__8wekyb3d8bbwe\\ms-teamsupdate.exe",
+      "source": "app_paths",
+      "key": "ms teamsupdate"
+    },
+    {
+      "name": "MSACCESS",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\MSACCESS.EXE",
+      "source": "app_paths",
+      "key": "msaccess"
+    },
+    {
+      "name": "msedge",
+      "target": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "source": "app_paths",
+      "key": "msedge"
+    },
+    {
+      "name": "msoadfsb",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\msoadfsb.exe",
+      "source": "app_paths",
+      "key": "msoadfsb"
+    },
+    {
+      "name": "msoasb",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\msoasb.exe",
+      "source": "app_paths",
+      "key": "msoasb"
+    },
+    {
+      "name": "msoxmled",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\VFS\\ProgramFilesCommonX64\\Microsoft Shared\\OFFICE16\\MSOXMLED.EXE",
+      "source": "app_paths",
+      "key": "msoxmled"
+    },
+    {
+      "name": "Narrator",
+      "target": "C:\\WINDOWS\\system32\\narrator.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "narrator"
+    },
+    {
+      "name": "Node.js",
+      "target": "C:\\Program Files\\nodejs\\node.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "node js"
+    },
+    {
+      "name": "Node.js command prompt",
+      "target": "C:\\Windows\\System32\\cmd.exe",
+      "args": "/k \"C:\\Program Files\\nodejs\\nodevars.bat\"",
+      "source": "start_menu",
+      "key": "node js command prompt"
+    },
+    {
+      "name": "Notepad",
+      "target": "C:\\WINDOWS\\system32\\notepad.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "notepad"
+    },
+    {
+      "name": "NVIDIA PhysX Properties",
+      "target": "C:\\Windows\\SysWOW64\\PhysX.cpl",
+      "args": "",
+      "source": "start_menu",
+      "key": "nvidia physx properties"
+    },
+    {
+      "name": "OBS Studio",
+      "target": "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
+      "source": "uninstall",
+      "key": "obs studio"
+    },
+    {
+      "name": "ODBC Data Sources (32-bit)",
+      "target": "C:\\WINDOWS\\syswow64\\odbcad32.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "odbc data sources 32 bit"
+    },
+    {
+      "name": "ODBC Data Sources (64-bit)",
+      "target": "C:\\WINDOWS\\system32\\odbcad32.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "odbc data sources 64 bit"
+    },
+    {
+      "name": "olk",
+      "target": "C:\\Program Files\\WindowsApps\\Microsoft.OutlookForWindows_1.2026.420.300_x64__8wekyb3d8bbwe\\olk.exe",
+      "source": "app_paths",
+      "key": "olk"
+    },
+    {
+      "name": "Ollama",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Ollama\\ollama app.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "ollama"
+    },
+    {
+      "name": "Ollama version 0.32.5",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Ollama\\unins000.exe",
+      "source": "uninstall",
+      "key": "ollama version 0 32 5"
+    },
+    {
+      "name": "On-Screen Keyboard",
+      "target": "C:\\WINDOWS\\system32\\osk.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "on screen keyboard"
+    },
+    {
+      "name": "OneDrive",
+      "target": "C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "onedrive"
+    },
+    {
+      "name": "OneDrive Photos",
+      "target": "C:\\Program Files\\Microsoft OneDrive\\OneDrive.App.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "onedrive photos"
+    },
+    {
+      "name": "OneNote",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\ONENOTE.EXE",
+      "source": "app_paths",
+      "key": "onenote"
+    },
+    {
+      "name": "OpenAL",
+      "target": "C:\\Program Files (x86)\\OpenAL\\oalinst.exe",
+      "source": "uninstall",
+      "key": "openal"
+    },
+    {
+      "name": "OUTLOOK",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\OUTLOOK.EXE",
+      "source": "app_paths",
+      "key": "outlook"
+    },
+    {
+      "name": "Outlook (classic)",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+      "args": "",
+      "source": "start_menu",
+      "key": "outlook classic"
+    },
+    {
+      "name": "Paint",
+      "target": "C:\\WINDOWS\\system32\\mspaint.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "paint"
+    },
+    {
+      "name": "Performance Monitor",
+      "target": "C:\\WINDOWS\\system32\\perfmon.msc",
+      "args": "/s",
+      "source": "start_menu",
+      "key": "performance monitor"
+    },
+    {
+      "name": "pip3.13",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\pip3.13.exe",
+      "source": "app_paths",
+      "key": "pip3 13"
+    },
+    {
+      "name": "powerpnt",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\POWERPNT.EXE",
+      "source": "app_paths",
+      "key": "powerpnt"
+    },
+    {
+      "name": "PowerPoint",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE",
+      "args": "",
+      "source": "start_menu",
+      "key": "powerpoint"
+    },
+    {
+      "name": "Preferencias de idioma de Office",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\SETLANG.EXE",
+      "args": "",
+      "source": "start_menu",
+      "key": "preferencias de idioma de office"
+    },
+    {
+      "name": "Print Management",
+      "target": "C:\\WINDOWS\\system32\\printmanagement.msc",
+      "args": "",
+      "source": "start_menu",
+      "key": "print management"
+    },
+    {
+      "name": "Project",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINPROJ.EXE",
+      "args": "",
+      "source": "start_menu",
+      "key": "project"
+    },
+    {
+      "name": "Project Server Accounts",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINPROJ.EXE",
+      "args": "-ProjectProfiles",
+      "source": "start_menu",
+      "key": "project server accounts"
+    },
+    {
+      "name": "py",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\py.exe",
+      "source": "app_paths",
+      "key": "py"
+    },
+    {
+      "name": "pymanager",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\pymanager.exe",
+      "source": "app_paths",
+      "key": "pymanager"
+    },
+    {
+      "name": "python",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\python.exe",
+      "source": "app_paths",
+      "key": "python"
+    },
+    {
+      "name": "Python 3.12 (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "python 3 12 64 bit"
+    },
+    {
+      "name": "Python 3.12.9 (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Package Cache\\{95f11c27-5079-4ec7-b5b0-fda34467b15e}\\python-3.12.9-amd64.exe",
+      "source": "uninstall",
+      "key": "python 3 12 9 64 bit"
+    },
+    {
+      "name": "Python 3.12 Manuals (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python312\\Doc\\html\\index.html",
+      "args": "",
+      "source": "start_menu",
+      "key": "python 3 12 manuals 64 bit"
+    },
+    {
+      "name": "Python 3.12 Module Docs (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "args": "-m pydoc -b",
+      "source": "start_menu",
+      "key": "python 3 12 module docs 64 bit"
+    },
+    {
+      "name": "Python 3.13.0 (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Package Cache\\{5f75c346-3aaf-4f17-8545-2a21a740bb7a}\\python-3.13.0-amd64.exe",
+      "source": "uninstall",
+      "key": "python 3 13 0 64 bit"
+    },
+    {
+      "name": "Python 3.13 (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "python 3 13 64 bit"
+    },
+    {
+      "name": "Python 3.13 Manuals (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python313\\Doc\\html\\index.html",
+      "args": "",
+      "source": "start_menu",
+      "key": "python 3 13 manuals 64 bit"
+    },
+    {
+      "name": "Python 3.13 Module Docs (64-bit)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "args": "-m pydoc -b",
+      "source": "start_menu",
+      "key": "python 3 13 module docs 64 bit"
+    },
+    {
+      "name": "python3",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\python3.exe",
+      "source": "app_paths",
+      "key": "python3"
+    },
+    {
+      "name": "python3.13",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\python3.13.exe",
+      "source": "app_paths",
+      "key": "python3 13"
+    },
+    {
+      "name": "pythonw",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\pythonw.exe",
+      "source": "app_paths",
+      "key": "pythonw"
+    },
+    {
+      "name": "pythonw3.13",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\pythonw3.13.exe",
+      "source": "app_paths",
+      "key": "pythonw3 13"
+    },
+    {
+      "name": "pyw",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\pyw.exe",
+      "source": "app_paths",
+      "key": "pyw"
+    },
+    {
+      "name": "pywmanager",
+      "target": "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.PythonManager_26.1.240.0_x64__3847v3x7pw1km\\pywmanager.exe",
+      "source": "app_paths",
+      "key": "pywmanager"
+    },
+    {
+      "name": "Que hay de nuevo en la última versión",
+      "target": "C:\\Program Files\\WinRAR\\Novedades.txt",
+      "args": "",
+      "source": "start_menu",
+      "key": "que hay de nuevo en la ultima version"
+    },
+    {
+      "name": "Quick Assist",
+      "target": "C:\\WINDOWS\\system32\\quickassist.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "quick assist"
+    },
+    {
+      "name": "ReadMe",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\ReadMe.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "readme"
+    },
+    {
+      "name": "RecoveryDrive",
+      "target": "C:\\WINDOWS\\system32\\RecoveryDrive.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "recoverydrive"
+    },
+    {
+      "name": "Registry Editor",
+      "target": "C:\\WINDOWS\\regedit.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "registry editor"
+    },
+    {
+      "name": "Remote Desktop Connection",
+      "target": "C:\\WINDOWS\\system32\\mstsc.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "remote desktop connection"
+    },
+    {
+      "name": "Replay",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Replay\\Replay.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "replay"
+    },
+    {
+      "name": "Resource Monitor",
+      "target": "C:\\WINDOWS\\system32\\perfmon.exe",
+      "args": "/res",
+      "source": "start_menu",
+      "key": "resource monitor"
+    },
+    {
+      "name": "Riot Client",
+      "target": "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "riot client"
+    },
+    {
+      "name": "Run",
+      "target": "C:\\Users\\villa\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\Run.lnk",
+      "args": "",
+      "source": "start_menu",
+      "key": "run"
+    },
+    {
+      "name": "sdxhelper",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\SDXHelper.exe",
+      "source": "app_paths",
+      "key": "sdxhelper"
+    },
+    {
+      "name": "Security Configuration Management",
+      "target": "C:\\WINDOWS\\system32\\secpol.msc",
+      "args": "/s",
+      "source": "start_menu",
+      "key": "security configuration management"
+    },
+    {
+      "name": "services",
+      "target": "C:\\WINDOWS\\system32\\services.msc",
+      "args": "",
+      "source": "start_menu",
+      "key": "services"
+    },
+    {
+      "name": "Skype",
+      "target": "C:\\Program Files\\WindowsApps\\Microsoft.SkypeApp_15.150.3125.0_x64__kzf8qxf38zg5c\\Skype\\Skype.exe",
+      "source": "app_paths",
+      "key": "skype"
+    },
+    {
+      "name": "SKYPESERVER",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\SkypeSrv\\SKYPESERVER.EXE",
+      "source": "app_paths",
+      "key": "skypeserver"
+    },
+    {
+      "name": "Snipping Tool",
+      "target": "C:\\WINDOWS\\system32\\SnippingTool.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "snipping tool"
+    },
+    {
+      "name": "Speech Recognition",
+      "target": "C:\\WINDOWS\\Speech\\Common\\sapisvr.exe",
+      "args": "-SpeechUX",
+      "source": "start_menu",
+      "key": "speech recognition"
+    },
+    {
+      "name": "Spreadsheet Compare",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Client\\AppVLP.exe",
+      "args": "\"C:\\Program Files (x86)\\Microsoft Office\\Office16\\DCF\\SPREADSHEETCOMPARE.EXE\"",
+      "source": "start_menu",
+      "key": "spreadsheet compare"
+    },
+    {
+      "name": "StarUML",
+      "target": "C:\\Program Files\\StarUML\\StarUML.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "staruml"
+    },
+    {
+      "name": "StarUML 7.1.0",
+      "target": "C:\\Program Files\\StarUML\\StarUML.exe",
+      "source": "uninstall",
+      "key": "staruml 7 1 0"
+    },
+    {
+      "name": "Steam",
+      "target": "C:\\Program Files (x86)\\Steam\\uninstall.exe",
+      "source": "uninstall",
+      "key": "steam"
+    },
+    {
+      "name": "Steps Recorder",
+      "target": "C:\\WINDOWS\\system32\\psr.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "steps recorder"
+    },
+    {
+      "name": "store",
+      "target": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsStore_22606.1401.3.0_x64__8wekyb3d8bbwe\\store.exe",
+      "source": "app_paths",
+      "key": "store"
+    },
+    {
+      "name": "System Configuration",
+      "target": "C:\\WINDOWS\\system32\\msconfig.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "system configuration"
+    },
+    {
+      "name": "System Information",
+      "target": "C:\\WINDOWS\\system32\\msinfo32.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "system information"
+    },
+    {
+      "name": "TAP-Windows 9.24.2",
+      "target": "C:\\Program Files\\TAP-Windows\\icon.ico",
+      "source": "uninstall",
+      "key": "tap windows 9 24 2"
+    },
+    {
+      "name": "Task Manager",
+      "target": "C:\\WINDOWS\\system32\\taskmgr.exe",
+      "args": "/7",
+      "source": "start_menu",
+      "key": "task manager"
+    },
+    {
+      "name": "Task Scheduler",
+      "target": "C:\\WINDOWS\\system32\\taskschd.msc",
+      "args": "/s",
+      "source": "start_menu",
+      "key": "task scheduler"
+    },
+    {
+      "name": "Tesseract-OCR - open source OCR engine",
+      "target": "C:\\Program Files\\Tesseract-OCR\\tesseract-uninstall.exe",
+      "source": "uninstall",
+      "key": "tesseract ocr open source ocr engine"
+    },
+    {
+      "name": "TLauncher",
+      "target": "C:\\Users\\villa\\AppData\\Roaming\\.minecraft\\TLauncher.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "tlauncher"
+    },
+    {
+      "name": "Uninstall",
+      "target": "C:\\Program Files\\Live2D Cubism 5.3\\uninst.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "uninstall"
+    },
+    {
+      "name": "Uninstall Node.js",
+      "target": "C:\\Windows\\SysWOW64\\msiexec.exe",
+      "args": "/x {8E3EF5A2-585E-453B-B16C-B46E05A62DAC}",
+      "source": "start_menu",
+      "key": "uninstall node js"
+    },
+    {
+      "name": "Uninstall Replay",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Replay\\Replay.exe",
+      "source": "uninstall",
+      "key": "uninstall replay"
+    },
+    {
+      "name": "Uninstall UrbanVPN 5.1.1.7683",
+      "target": "C:\\Windows\\SysWOW64\\msiexec.exe",
+      "args": "/x {68B6BD06-7C8E-436A-8DED-EF1DF9B01446}",
+      "source": "start_menu",
+      "key": "uninstall urbanvpn 5 1 1 7683"
+    },
+    {
+      "name": "Uninstall XAMPP",
+      "target": "C:\\xampp\\uninstall.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "uninstall xampp"
+    },
+    {
+      "name": "UrbanVPN",
+      "target": "C:\\WINDOWS\\Installer\\{68B6BD06-7C8E-436A-8DED-EF1DF9B01446}\\urbanvpnapp.exe",
+      "source": "uninstall",
+      "key": "urbanvpn"
+    },
+    {
+      "name": "uTorrent Web",
+      "target": "C:\\Users\\villa\\AppData\\Roaming\\uTorrent Web\\utweb.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "utorrent web"
+    },
+    {
+      "name": "VALORANT",
+      "target": "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
+      "args": "--launch-product=valorant --launch-patchline=live",
+      "source": "start_menu",
+      "key": "valorant"
+    },
+    {
+      "name": "VBCABLE, The Virtual Audio Cable",
+      "target": "C:\\Program Files\\VB\\CABLE\\VBCABLE_Setup_x64.exe",
+      "source": "uninstall",
+      "key": "vbcable the virtual audio cable"
+    },
+    {
+      "name": "visio",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\VISIO.EXE",
+      "source": "app_paths",
+      "key": "visio"
+    },
+    {
+      "name": "Visual Studio 2022",
+      "target": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "visual studio 2022"
+    },
+    {
+      "name": "Visual Studio Code",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "visual studio code"
+    },
+    {
+      "name": "Visual Studio Community 2022",
+      "target": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe",
+      "source": "uninstall",
+      "key": "visual studio community 2022"
+    },
+    {
+      "name": "Visual Studio Installer",
+      "target": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\setup.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "visual studio installer"
+    },
+    {
+      "name": "Voice.ai - Voice Changer",
+      "target": "C:\\Program Files\\Voice.ai\\VoiceAI.exe",
+      "source": "uninstall",
+      "key": "voice ai voice changer"
+    },
+    {
+      "name": "Voicemod",
+      "target": "C:\\Program Files\\Voicemod V3\\Voicemod.exe",
+      "source": "uninstall",
+      "key": "voicemod"
+    },
+    {
+      "name": "VRoid Studio",
+      "target": "C:\\Program Files (x86)\\Steam\\steam\\games\\7e8e6b042ba15dcd5238bda279d8c9c02ceb53ce.ico",
+      "source": "uninstall",
+      "key": "vroid studio"
+    },
+    {
+      "name": "VRoidStudio 2.13.0",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\VRoidStudio\\2.13.0\\VRoidStudio.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "vroidstudio 2 13 0"
+    },
+    {
+      "name": "WebAdvisor de McAfee",
+      "target": "C:\\Program Files\\McAfee\\WebAdvisor\\MFW\\packages\\builtin\\msac.ico",
+      "source": "uninstall",
+      "key": "webadvisor de mcafee"
+    },
+    {
+      "name": "Website",
+      "target": "C:\\Program Files\\Live2D Cubism 5.3\\Live2D Cubism.url",
+      "args": "",
+      "source": "start_menu",
+      "key": "website"
+    },
+    {
+      "name": "WebView2 Runtime de Microsoft Edge",
+      "target": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\150.0.4078.105\\msedgewebview2.exe",
+      "source": "uninstall",
+      "key": "webview2 runtime de microsoft edge"
+    },
+    {
+      "name": "Windows Defender Firewall with Advanced Security",
+      "target": "C:\\WINDOWS\\system32\\WF.msc",
+      "args": "",
+      "source": "start_menu",
+      "key": "windows defender firewall with advanced security"
+    },
+    {
+      "name": "Windows Fax and Scan",
+      "target": "C:\\WINDOWS\\system32\\WFS.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "windows fax and scan"
+    },
+    {
+      "name": "Windows Media Player",
+      "target": "C:\\Program Files (x86)\\Windows Media Player\\wmplayer.exe",
+      "args": "/prefetch:1",
+      "source": "start_menu",
+      "key": "windows media player"
+    },
+    {
+      "name": "Windows PowerShell",
+      "target": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "windows powershell"
+    },
+    {
+      "name": "Windows PowerShell ISE",
+      "target": "C:\\WINDOWS\\system32\\WindowsPowerShell\\v1.0\\PowerShell_ISE.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "windows powershell ise"
+    },
+    {
+      "name": "Windows PowerShell ISE (x86)",
+      "target": "C:\\WINDOWS\\syswow64\\WindowsPowerShell\\v1.0\\PowerShell_ISE.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "windows powershell ise x86"
+    },
+    {
+      "name": "Windows PowerShell (x86)",
+      "target": "C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "windows powershell x86"
+    },
+    {
+      "name": "WindowsPackageManagerServer",
+      "target": "C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_1.29.280.0_x64__8wekyb3d8bbwe\\WindowsPackageManagerServer.exe",
+      "source": "app_paths",
+      "key": "windowspackagemanagerserver"
+    },
+    {
+      "name": "winget",
+      "target": "C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_1.29.280.0_x64__8wekyb3d8bbwe\\winget.exe",
+      "source": "app_paths",
+      "key": "winget"
+    },
+    {
+      "name": "WINPROJ",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\WINPROJ.EXE",
+      "source": "app_paths",
+      "key": "winproj"
+    },
+    {
+      "name": "WinRAR",
+      "target": "C:\\Program Files\\WinRAR\\WinRAR.exe",
+      "source": "app_paths",
+      "key": "winrar"
+    },
+    {
+      "name": "WinRAR 7.13 (64-bit)",
+      "target": "C:\\Program Files\\WinRAR\\WinRAR.exe",
+      "source": "uninstall",
+      "key": "winrar 7 13 64 bit"
+    },
+    {
+      "name": "Winword",
+      "target": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\WINWORD.EXE",
+      "source": "app_paths",
+      "key": "winword"
+    },
+    {
+      "name": "Wondershare Filmora 14",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Wondershare\\Wondershare Filmora\\Wondershare Filmora Launcher.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "wondershare filmora 14"
+    },
+    {
+      "name": "Wondershare Filmora 14(Build 14.10.5.15330)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Wondershare\\Wondershare Filmora\\unins000.exe",
+      "source": "uninstall",
+      "key": "wondershare filmora 14 build 14 10 5 15330"
+    },
+    {
+      "name": "Wondershare NativePush(Build 1.1.1.0)",
+      "target": "C:\\Users\\villa\\AppData\\Local\\Wondershare\\Wondershare NativePush\\Uninstall.ico",
+      "source": "uninstall",
+      "key": "wondershare nativepush build 1 1 1 0"
+    },
+    {
+      "name": "Word",
+      "target": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+      "args": "",
+      "source": "start_menu",
+      "key": "word"
+    },
+    {
+      "name": "Wordpad",
+      "target": "C:\\Program Files\\Windows NT\\Accessories\\wordpad.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "wordpad"
+    },
+    {
+      "name": "XAMPP",
+      "target": "C:\\xampp/install/xampp.ico",
+      "source": "uninstall",
+      "key": "xampp"
+    },
+    {
+      "name": "XAMPP Control Panel",
+      "target": "C:\\xampp\\xampp-control.exe",
+      "args": "",
+      "source": "start_menu",
+      "key": "xampp control panel"
+    },
+    {
+      "name": "XAMPP htdocs folder",
+      "target": "C:\\xampp\\htdocs",
+      "args": "",
+      "source": "start_menu",
+      "key": "xampp htdocs folder"
+    }
+  ]
+}

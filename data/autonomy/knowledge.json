@@ -1,0 +1,41 @@
+{
+  "preferences": [],
+  "patterns": {
+    "hola": 2,
+    "te": 2,
+    "como": 3,
+    "porque": 2,
+    "que": 12,
+    "ponte": 1,
+    "porfa": 1,
+    "solo": 1,
+    "me": 2,
+    "fue": 1,
+    "ahora": 1,
+    "cuantos": 3,
+    "si": 1,
+    "ve": 1,
+    "abre": 9,
+    "sonrie": 1,
+    "escuchas": 2,
+    "activa": 2,
+    "vez": 1,
+    "ya": 1,
+    "gracias": 1,
+    "así": 1,
+    "dime": 1,
+    "en": 1,
+    "cual": 1,
+    "sobre": 1,
+    "file": 2,
+    "salir": 1,
+    "explicame": 1,
+    "explica": 1,
+    "mira": 1,
+    "entonces": 1
+  },
+  "updated": 1785786919.4391296,
+  "checkin": {
+    "last_ts": 1785780367.3987203
+  }
+}

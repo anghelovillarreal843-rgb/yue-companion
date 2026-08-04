@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "lessons": [
+    {
+      "id": "1785785936618",
+      "instruction": "abre excel y haz una tabla sobre un rgistro de estudiantes",
+      "instruction_norm": "abre excel y haz una tabla sobre un rgistro de estudiantes",
+      "error": "alternativa OCR",
+      "history": [
+        "[FALLÓ] alternativa OCR"
+      ],
+      "lesson": "Falló porque la alternativa OCR no fue capaz de reconocer el texto o las acciones necesarias para crear la tabla en Excel. La próxima vez, utilizar la acción `open_app` para abrir Excel y luego `type_text` y `hotkey` para interactuar con la aplicación y crear la tabla de manera más precisa. Si la información proporcionada es insuficiente, no puedo proporcionar una solución más detallada.",
+      "ts": 1785785936.6187596
+    },
+    {
+      "id": "1785784322498",
+      "instruction": "abre word y haz un informe sobre v vegetacion",
+      "instruction_norm": "abre word y haz un informe sobre v vegetacion",
+      "error": "acción no confirmada",
+      "history": [
+        "[FALLÓ] acción no confirmada"
+      ],
+      "lesson": "La orden falló porque no se proporcionó suficiente información sobre cómo confirmar la acción de crear un informe en Word. La próxima vez, sería necesario utilizar la acción \"click_text\" o \"click_element\" para seleccionar la opción de guardar o confirmar el informe, o utilizar \"hotkey\" para confirmar la acción con una tecla de acceso rápido.",
+      "ts": 1785784322.4986484
+    },
+    {
+      "id": "1785783849624",
+      "instruction": "abre word y haz una tesis para una universidad",
+      "instruction_norm": "abre word y haz una tesis para una universidad",
+      "error": "No pude completar «office_save» después de 3 intentos: Falló office_save: [WinError 5] Acceso denegado: 'C:\\\\Users\\\\Usuario'",
+      "history": [
+        "[FALLÓ] No pude completar «office_save» después de 3 intentos: Falló office_save: [WinError 5] Acceso denegado: 'C:\\\\Users\\\\Usuario'"
+      ],
+      "lesson": "Falló porque no se tenía permiso para acceder a la ruta 'C:\\\\Users\\\\Usuario' y guardar el archivo. La próxima vez, debería utilizarse la acción `focus_window` para asegurarse de que la ventana de Word esté en foco y luego intentar guardar el archivo con `hotkey` \"Ctrl+S\" o `click_element` en el botón de guardar, o incluso intentar cambiar la ruta de guardado con `type_text` para escribir una ruta ",
+      "ts": 1785783849.6242402
+    }
+  ],
+  "updated": 1785785937.620348
+}

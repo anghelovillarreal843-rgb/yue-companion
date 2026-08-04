@@ -1,0 +1,752 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:transparent; }
+  #c { display:block; width:100vw; height:100vh; }
+  #msg { position:fixed; left:6px; right:6px; top:44%; text-align:center;
+         font-family:Segoe UI, Arial, sans-serif; font-size:13px; color:#f0e9fb;
+         text-shadow:0 1px 4px #000, 0 0 8px #000; line-height:1.4; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="msg">Cargando a Yue…</div>
+
+<!-- three.js + GLTFLoader + three-vrm (UMD). Se cargan en orden: primero desde
+     una copia LOCAL (assets/vendor/, servida por http local) y, si no existe,
+     desde internet (unpkg). Asi el 3D puede funcionar sin internet y mas rapido. -->
+<script>
+(function () {
+  // [local, cdn] para cada libreria, EN ORDEN (three -> loader -> vrm)
+  var LIBS = [
+    ["/assets/vendor/three.min.js",   "https://unpkg.com/three@0.137.0/build/three.min.js"],
+    ["/assets/vendor/GLTFLoader.js",  "https://unpkg.com/three@0.137.0/examples/js/loaders/GLTFLoader.js"],
+    ["/assets/vendor/three-vrm.js",   "https://unpkg.com/@pixiv/three-vrm@1/lib/three-vrm.js"]
+  ];
+  function setMsg(t){ var m=document.getElementById("msg"); if(m){ m.style.display="block"; m.textContent=t; } }
+  function loadOne(urls, done){
+    var i = 0;
+    (function attempt(){
+      if (i >= urls.length){ done(false); return; }
+      var s = document.createElement("script");
+      s.src = urls[i++];
+      s.async = false;
+      s.onload = function(){ done(true); };
+      s.onerror = function(){ attempt(); };   // si falla local, prueba CDN
+      document.head.appendChild(s);
+    })();
+  }
+  function chain(idx){
+    if (idx >= LIBS.length){ if (window.__startYue) window.__startYue(); return; }
+    setMsg("Cargando librerías 3D… (" + (idx+1) + "/3)");
+    loadOne(LIBS[idx], function(){ chain(idx + 1); });
+  }
+  // arrancar cuando el DOM (canvas, #msg) ya exista
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", function(){ chain(0); });
+  else chain(0);
+})();
+</script>
+
+<script>
+const _p = new URLSearchParams(location.search);
+const VRM_URL = _p.get("vrm") || "../assets/yue.vrm";  // servido por http local
+const BASE_TURN = parseFloat(_p.get("turn") || "0");   // giro base (rad)
+const DEBUG = _p.get("debug") === "1";                 // fondo visible de prueba
+// Pose de los brazos (ajustable desde el .env).
+const ARM_DOWN = parseFloat(_p.get("armDown") || "1.48");  // cuanto bajan (rad). +bajan mas
+const ARM_FWD  = parseFloat(_p.get("armFwd")  || "0.35");  // adelante(+)/atras(-). Si van ATRAS, sube esto
+const ARM_IN   = parseFloat(_p.get("armIn")   || "0.12");  // antebrazos hacia adentro
+// Encuadre de la camara (para que se vea toda la cabeza/el pelo).
+const CAM_DIST = parseFloat(_p.get("camDist") || "1.85");  // distancia. +lejos = se ve mas cuerpo y cabeza
+const CAM_Y    = parseFloat(_p.get("camY")    || "-0.16");
+// Cuanta gesticulacion. 0 = solo idle (como antes). 1 = normal. >1 = teatral.
+const GESTURE_GAIN = Math.max(0, Math.min(2, parseFloat(_p.get("gest") || "1"))); // aim vertical relativo a la cabeza (mas negativo = cabeza mas arriba)
+
+function msg(t){ var m=document.getElementById("msg"); if(m){ m.style.display="block"; m.textContent=t; } }
+function hideMsg(){ var m=document.getElementById("msg"); if(m) m.style.display="none"; }
+window.onerror = function(e){ msg("Error: " + e); document.title = "VRM_ERROR"; };
+
+let renderer, scene, camera, clock, vrm = null, lookTarget;
+let talking = false;
+let emotion = "neutral", emoUntil = 0, emotionIntensity = 1;
+let look = { x: 0, y: 0 }, smoothLook = { x: 0, y: 0 };
+// Estado continuo del acompañamiento multimedia. Solo anima parámetros; no
+// conoce ni conserva el contenido que YUE está observando.
+let mediaCompanion = { active:false, rhythm:0, tempo:0, energy:0, calm:0, look:true };
+let blinkT = 0, nextBlink = 2 + Math.random() * 2, blinkValue = 0;
+let mouthValue = 0;
+// --- Lip-sync real (amplitud del audio) ---------------------------------
+// core/voice.py calcula un envelope RMS del audio YA sintetizado y lo manda
+// aquí al empezar a sonar. Guardamos t0 con performance.now() en el momento en
+// que llega (= arranque de reproducción) y leemos la amplitud interpolada según
+// el tiempo transcurrido. Si no hay envelope, la boca usa el seno de respaldo.
+let lipEnv = null;   // { values:[0..1], blockMs, t0, durMs }
+function setLipsync(data){
+  if (!data || !data.values || !data.values.length){ lipEnv = null; return; }
+  const blockMs = data.block_ms || data.blockMs || 40;
+  lipEnv = {
+    values: data.values,
+    blockMs: blockMs,
+    t0: performance.now(),
+    durMs: data.values.length * blockMs
+  };
+}
+function sampleLipEnv(){
+  if (!lipEnv) return null;
+  const elapsed = performance.now() - lipEnv.t0;
+  if (elapsed < 0) return null;
+  if (elapsed >= lipEnv.durMs){ lipEnv = null; return null; }  // se suelta solo
+  const fpos = elapsed / lipEnv.blockMs;
+  const i = fpos | 0;
+  const frac = fpos - i;
+  const a = lipEnv.values[i] || 0;
+  const b = (i + 1 < lipEnv.values.length) ? lipEnv.values[i + 1] : a;
+  return a + (b - a) * frac;   // interpolación lineal entre bloques
+}
+
+const expressionValues = { happy:0, angry:0, sad:0, relaxed:0, surprised:0 };
+// huesos para pose y animaciones corporales suaves
+let bones = {
+  lUp:null, rUp:null, lLow:null, rLow:null,
+  head:null, neck:null, chest:null, spine:null, hips:null,
+  lShoulder:null, rShoulder:null
+};
+
+const EMOTION_PROFILES = {
+  neutral:   { expr:{}, sway:0.018, bounce:0.004, nod:0.020, turn:0.030, tilt:0.020, speed:0.75, lean:0.000, shake:0.000, shoulder:0.000, armWave:0.000, blink:1.00 },
+  happy:     { expr:{happy:0.88,relaxed:0.15}, sway:0.040, bounce:0.013, nod:0.055, turn:0.055, tilt:0.050, speed:1.18, lean:-0.010, shake:0.000, shoulder:0.035, armWave:0.030, blink:0.90 },
+  excited:   { expr:{happy:1.0,surprised:0.34}, sway:0.066, bounce:0.027, nod:0.095, turn:0.070, tilt:0.065, speed:1.72, lean:-0.025, shake:0.008, shoulder:0.070, armWave:0.075, blink:0.72 },
+  love:      { expr:{happy:0.78,relaxed:0.38}, sway:0.032, bounce:0.009, nod:0.028, turn:0.035, tilt:0.125, speed:0.82, lookAway:0.20, lean:0.010, shoulder:0.018, armWave:0.010, blink:1.15 },
+  shy:       { expr:{happy:0.48,relaxed:0.24}, sway:0.020, bounce:0.006, nod:0.023, turn:0.030, tilt:0.115, speed:0.70, lookAway:0.32, lean:0.035, shoulder:-0.020, armWave:0.000, blink:1.25 },
+  proud:     { expr:{happy:0.58,relaxed:0.22}, sway:0.022, bounce:0.007, nod:0.034, turn:0.030, tilt:-0.040, speed:0.78, chin:-0.060, lean:-0.030, shoulder:0.055, armWave:0.010, blink:1.00 },
+  playful:   { expr:{happy:0.78,surprised:0.12}, sway:0.060, bounce:0.015, nod:0.052, turn:0.105, tilt:0.100, speed:1.32, lean:-0.010, shake:0.006, shoulder:0.040, armWave:0.065, blink:0.82 },
+  curious:   { expr:{surprised:0.30,happy:0.18}, sway:0.016, bounce:0.005, nod:0.023, turn:0.042, tilt:0.135, speed:0.72, lean:-0.018, shoulder:0.010, armWave:0.005, blink:0.92 },
+  confused:  { expr:{surprised:0.32,sad:0.14}, sway:0.014, bounce:0.003, nod:0.020, turn:0.060, tilt:-0.135, speed:0.62, lean:0.010, shake:0.004, shoulder:-0.012, armWave:0.000, blink:1.08 },
+  worried:   { expr:{sad:0.44,surprised:0.15}, sway:0.013, bounce:0.003, nod:0.032, turn:0.030, tilt:0.045, speed:0.72, chin:0.050, lean:0.045, shoulder:-0.035, armWave:0.000, blink:0.82 },
+  sad:       { expr:{sad:0.92}, sway:0.009, bounce:0.001, nod:0.028, turn:0.018, tilt:0.045, speed:0.48, chin:0.115, lean:0.075, shoulder:-0.060, armWave:0.000, blink:1.35 },
+  angry:     { expr:{angry:0.92}, sway:0.020, bounce:0.005, nod:0.052, turn:0.030, tilt:-0.030, speed:1.22, chin:-0.032, lean:-0.045, shake:0.012, shoulder:0.045, armWave:0.018, blink:0.78 },
+  surprised: { expr:{surprised:1.0}, sway:0.034, bounce:0.020, nod:0.040, turn:0.030, tilt:0.025, speed:1.42, chin:-0.060, lean:-0.050, shake:0.004, shoulder:0.085, armWave:0.040, blink:0.62 },
+  relaxed:   { expr:{relaxed:0.92,happy:0.10}, sway:0.024, bounce:0.004, nod:0.018, turn:0.025, tilt:0.050, speed:0.46, lean:0.015, shoulder:-0.015, armWave:0.000, blink:1.45 },
+  focused:   { expr:{relaxed:0.18}, sway:0.007, bounce:0.002, nod:0.014, turn:0.010, tilt:0.002, speed:0.52, chin:-0.022, lean:-0.030, shoulder:0.018, armWave:0.000, blink:1.15 },
+  bored:     { expr:{relaxed:0.38,sad:0.18}, sway:0.009, bounce:0.001, nod:0.012, turn:0.018, tilt:0.082, speed:0.34, chin:0.060, lean:0.055, shoulder:-0.045, armWave:0.000, blink:1.55 },
+  sleepy:    { expr:{relaxed:0.86}, sway:0.013, bounce:0.002, nod:0.040, turn:0.012, tilt:0.080, speed:0.27, chin:0.095, lean:0.070, shoulder:-0.050, armWave:0.000, blink:1.80 }
+};
+
+// ============================================================
+// Capa de GESTOS (aditiva) · YUE
+// ============================================================
+// El avatar solo tenia idle: senos continuos. Suave, pero en bucle: nunca
+// "hace" nada, solo oscila. Los gestos son movimientos PUNTUALES con arco
+// (anticipacion -> accion -> asentamiento) que se suman encima del idle.
+//
+// POR QUE NO SE PUEDE TRABAR:
+//   1. Cada gesto tiene duracion fija y su curva vale EXACTAMENTE 0 en u=0 y
+//      u=1. Al acabar, aporta cero: la pose vuelve sola al idle.
+//   2. Se suman DESPUES del damp, sobre una base guardada aparte. Si se sumaran
+//      antes, el damp leeria su propia salida y se realimentaria (deriva).
+//   3. Cada canal esta topado (clampCanal). Aunque coincidan tres gestos, el
+//      hueso nunca sale de un rango que el VRM aguanta.
+//   4. Un gesto nuevo del mismo nombre reemplaza al anterior: no se apilan
+//      infinitos.
+
+const GEST_MAX = 6;                 // gestos simultaneos como mucho
+
+// --- curvas base -------------------------------------------------------
+// Todas: f(0)=0 y f(1)=0. Esa es la garantia de "no se queda trabado".
+function arco(u) {                  // sube y baja una vez
+  return Math.sin(Math.PI * u);
+}
+function golpe(u, anticip) {        // se prepara hacia atras y luego va
+  anticip = anticip === undefined ? 0.28 : anticip;
+  const accion = Math.sin(Math.PI * Math.pow(u, 0.7));
+  const prep = -anticip * Math.sin(Math.PI * Math.min(1, u / 0.28));
+  return accion * (u < 0.28 ? u / 0.28 : 1) + prep;
+}
+function rebote(u, ciclos, amort) { // oscila y se asienta (reir, negar)
+  ciclos = ciclos || 2;
+  amort = amort === undefined ? 3.2 : amort;
+  return Math.sin(2 * Math.PI * ciclos * u) * Math.exp(-amort * u) * (1 - u);
+}
+function respira(u) {               // infla y desinfla (suspiro)
+  return Math.sin(Math.PI * Math.pow(u, 0.55));
+}
+function sostiene(u, subida) {      // llega, se queda un rato, se va
+  subida = subida || 0.22;
+  if (u < subida) return Math.sin((u / subida) * Math.PI / 2);
+  if (u > 1 - subida) return Math.sin(((1 - u) / subida) * Math.PI / 2);
+  return 1;
+}
+
+// --- biblioteca de gestos ---------------------------------------------
+// SOLO cabeza, cuello, pecho, hombros, columna y cadera. Nada de manos a la
+// cara ni brazos cruzados: el VRM no tiene IK y esos gestos atraviesan el
+// cuerpo. Estos son los que el modelo puede hacer bien de verdad.
+const GESTOS = {
+  asentir:    { dur: 0.9,  fn: (u) => ({ headX: rebote(u, 1.5, 2.2) * 0.115 }) },
+  negar:      { dur: 1.0,  fn: (u) => ({ headY: rebote(u, 2, 2.4) * 0.16 }) },
+  ladear:     { dur: 1.5,  fn: (u) => ({ headZ: sostiene(u, 0.3) * 0.16,
+                                         headY: sostiene(u, 0.3) * 0.05 }) },
+  sobresalto: { dur: 0.8,  fn: (u) => ({ headX: -golpe(u) * 0.13,
+                                         chestX: -golpe(u) * 0.075,
+                                         hombros: arco(u) * 0.13,
+                                         cuerpoY: arco(Math.min(1, u * 2)) * 0.014 }) },
+  encoger:    { dur: 1.2,  fn: (u) => ({ hombros: sostiene(u, 0.28) * 0.14,
+                                         headZ: sostiene(u, 0.28) * 0.05,
+                                         headX: sostiene(u, 0.28) * 0.03 }) },
+  suspiro:    { dur: 2.0,  fn: (u) => ({ chestX: -respira(u) * 0.055,
+                                         headX: respira(u) * 0.05,
+                                         hombros: respira(u) * 0.06 }) },
+  reir:       { dur: 1.3,  fn: (u) => ({ cuerpoY: Math.abs(rebote(u, 3, 2.6)) * 0.020,
+                                         headX: rebote(u, 3, 2.6) * 0.055,
+                                         hombros: Math.abs(rebote(u, 3, 2.6)) * 0.06 }) },
+  asomarse:   { dur: 1.6,  fn: (u) => ({ cuerpoRotX: -sostiene(u, 0.32) * 0.045,
+                                         headX: -sostiene(u, 0.32) * 0.03,
+                                         headZ: sostiene(u, 0.32) * 0.07 }) },
+  retroceder: { dur: 0.9,  fn: (u) => ({ cuerpoRotX: golpe(u) * 0.055,
+                                         headX: -golpe(u) * 0.05 }) },
+  mirar_lejos:{ dur: 2.2,  fn: (u) => ({ headY: sostiene(u, 0.3) * 0.20,
+                                         headZ: sostiene(u, 0.3) * 0.10,
+                                         headX: sostiene(u, 0.3) * 0.035 }) },
+  estirarse:  { dur: 2.4,  fn: (u) => ({ chestX: -respira(u) * 0.07,
+                                         headX: -respira(u) * 0.08,
+                                         hombros: respira(u) * 0.09 }) },
+  celebrar:   { dur: 1.4,  fn: (u) => ({ cuerpoY: Math.abs(Math.sin(Math.PI * u * 2)) * (1 - u) * 0.028,
+                                         headX: -arco(u) * 0.06,
+                                         hombros: arco(u) * 0.12 }) },
+  pensar:     { dur: 2.0,  fn: (u) => ({ headZ: sostiene(u, 0.3) * 0.12,
+                                         headY: sostiene(u, 0.3) * -0.07,
+                                         headX: sostiene(u, 0.3) * 0.04 }) },
+  desanimo:   { dur: 2.2,  fn: (u) => ({ headX: sostiene(u, 0.35) * 0.10,
+                                         hombros: -sostiene(u, 0.35) * 0.09,
+                                         chestX: sostiene(u, 0.35) * 0.045 }) },
+};
+
+// Topes por canal: el seguro contra trabarse aunque se junten varios gestos.
+const TOPES = {
+  headX: 0.22, headY: 0.28, headZ: 0.22,
+  chestX: 0.10, hombros: 0.20,
+  cuerpoY: 0.035, cuerpoRotX: 0.075,
+};
+
+let gestos = [];
+
+function clampCanal(nombre, valor) {
+  const tope = TOPES[nombre] || 0.2;
+  return Math.max(-tope, Math.min(tope, valor));
+}
+
+function playGesture(nombre, opciones) {
+  const def = GESTOS[nombre];
+  if (!def) return false;
+  opciones = opciones || {};
+  const gain = Math.max(0, Math.min(1.5, opciones.gain === undefined ? 1 : opciones.gain));
+  if (gain <= 0.001) return false;
+  // Un gesto del mismo tipo reemplaza al anterior: nunca se apilan.
+  gestos = gestos.filter((g) => g.nombre !== nombre);
+  if (gestos.length >= GEST_MAX) gestos.shift();
+  gestos.push({ nombre, t: 0, dur: def.dur * (opciones.speed ? 1 / opciones.speed : 1), fn: def.fn, gain });
+  return true;
+}
+
+function sampleGestures(dt) {
+  const salida = { headX: 0, headY: 0, headZ: 0, chestX: 0, hombros: 0, cuerpoY: 0, cuerpoRotX: 0 };
+  if (!gestos.length) return salida;
+  const vivos = [];
+  for (const g of gestos) {
+    g.t += dt;
+    const u = g.t / g.dur;
+    if (u >= 1) continue;            // muere solo: aporta 0 y desaparece
+    const parcial = g.fn(u) || {};
+    for (const k in parcial) {
+      if (salida[k] !== undefined) salida[k] += parcial[k] * g.gain;
+    }
+    vivos.push(g);
+  }
+  gestos = vivos;
+  for (const k in salida) salida[k] = clampCanal(k, salida[k]);
+  return salida;
+}
+
+// --- que gesto acompana a cada emocion ---------------------------------
+// Es la clave de "que exprese lo que siente": la emocion ya no es solo una cara
+// congelada, ahora LLEGA con un movimiento.
+const GESTO_DE_EMOCION = {
+  happy:     ["asentir"],
+  excited:   ["celebrar"],
+  love:      ["mirar_lejos", "ladear"],
+  shy:       ["mirar_lejos"],
+  proud:     ["asentir"],
+  playful:   ["ladear"],
+  curious:   ["asomarse", "ladear"],
+  confused:  ["ladear", "negar"],
+  worried:   ["negar"],
+  sad:       ["desanimo"],
+  angry:     ["negar", "retroceder"],
+  surprised: ["sobresalto"],
+  relaxed:   ["suspiro"],
+  focused:   ["pensar"],
+  bored:     ["suspiro", "encoger"],
+  sleepy:    ["estirarse"],
+  neutral:   ["asentir"],
+};
+// Gestos pequenos que salen solos mientras habla o mientras espera. Sin esto,
+// entre emocion y emocion vuelve a ser una estatua que oscila.
+const GESTOS_AL_HABLAR = ["asentir", "ladear", "encoger"];
+const GESTOS_OCIOSOS = ["asentir", "ladear", "mirar_lejos", "suspiro"];
+
+let proxGestoHabla = 0, proxGestoOcio = 0;
+let proxSacada = 0, sacada = { x: 0, y: 0 }, sacadaObj = { x: 0, y: 0 };
+// Sobre de expresion: la cara llega a un pico y luego se asienta. Mantenerla
+// clavada al 0.88 todo el rato es lo que la hacia parecer una mascara.
+let exprPico = 0;
+
+// Respiración de intensidad por expresión: cada blendshape late lentamente
+// entre el 85% y el 100% de su valor, con frecuencia/fase distinta por canal.
+// Así, aunque una emoción dure varios minutos, la cara no se congela: cambia
+// de forma imperceptible pero constante. NO altera el carácter (el máximo sigue
+// siendo el valor definido en el perfil; solo "respira" hacia abajo hasta 85%).
+const EXPR_BREATH = {
+  happy:     { f: 0.55, p: 0.00 },
+  angry:     { f: 0.70, p: 1.70 },
+  sad:       { f: 0.40, p: 3.10 },
+  relaxed:   { f: 0.33, p: 2.20 },
+  surprised: { f: 0.80, p: 0.90 },
+};
+
+// Doble parpadeo de sobresalto: al ENTRAR en una emoción de alta intensidad
+// (angry/surprised/sad con expr>=0.85) se disparan dos parpadeos seguidos, una
+// señal humana de impacto emocional. `forcedBlinks` cuenta los parpadeos rápidos
+// extra pendientes tras el inmediato.
+let forcedBlinks = 0;
+const STARTLE_EMOTIONS = { angry: 1, surprised: 1, sad: 1 };
+function isHighIntensityEmotion(name){
+  if (!STARTLE_EMOTIONS[name]) return false;
+  const ex = (EMOTION_PROFILES[name] || {}).expr || {};
+  let mx = 0;
+  for (const k in ex) if (ex[k] > mx) mx = ex[k];
+  return mx >= 0.85;
+}
+function triggerStartleBlink(){
+  forcedBlinks = 1;      // uno inmediato (abajo) + este extra = doble
+  blinkT = nextBlink;    // fuerza que el parpadeo salte en el próximo frame
+}
+
+// Base amortiguada de la pose. IMPRESCINDIBLE tenerla aparte: si sumaramos los
+// gestos antes del damp, el damp leeria su propia salida sumada y se
+// realimentaria hasta desviar la pose. Con la base separada, el gesto es un
+// delta limpio que al acabar deja de sumar y ya.
+const base = {
+  headX:0, headY:0, headZ:0, neckY:0, neckZ:0,
+  chestX:0, chestY:0, spineX:0, spineZ:0, hipsY:0, hipsZ:0,
+  lShoulder:0, rShoulder:0, bodyY:0, bodyX:0, bodyRotY:0, bodyRotX:0
+};
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function damp(current, target, lambda, dt) {
+  return current + (target - current) * (1 - Math.exp(-lambda * dt));
+}
+// Ruido lento tipo "Perlin simplificado": suma de 3 senos de frecuencias no
+// relacionadas (proporciones irracionales) para que el patrón no se repita en
+// escalas de decenas de segundos. Sin librerías, solo Math.sin. Cada canal usa
+// un `seed` distinto -> los canales no laten a la vez. Sale aprox en [-1, 1].
+// Se usa para romper la periodicidad del idle: se suma con una amplitud pequeña
+// (~12% de la amplitud base del canal), así el movimiento nunca es idéntico
+// pero NO cambia el carácter de la emoción (una emoción tranquila sigue igual).
+function slowNoise(t, seed){
+  const a = Math.sin(t * 0.157 + seed * 1.30);
+  const b = Math.sin(t * 0.263 + seed * 2.70 + 1.10);
+  const c = Math.sin(t * 0.091 + seed * 4.10 + 2.30);
+  return (a * 0.50 + b * 0.33 + c * 0.27) / 1.10;
+}
+const NOISE_GAIN = 0.12;   // 12% de la amplitud base de cada canal
+function profile() {
+  const active = (performance.now() < emoUntil) ? emotion : "neutral";
+  return EMOTION_PROFILES[active] || EMOTION_PROFILES.neutral;
+}
+
+// Se llama cuando ya se cargaron (o se intentaron cargar) las 3 librerias.
+window.__startYue = function () {
+  if (typeof THREE === "undefined") { msg("No se cargó three.js (¿sin internet? pon los .js en assets/vendor/)"); document.title="VRM_ERROR"; }
+  else if (typeof THREE.GLTFLoader === "undefined") { msg("No se cargó GLTFLoader"); document.title="VRM_ERROR"; }
+  else if (typeof THREE_VRM === "undefined") { msg("No se cargó three-vrm"); document.title="VRM_ERROR"; }
+  else { try { init(); } catch (err) { msg("WebGL no disponible: " + err); document.title="VRM_ERROR"; } }
+};
+
+function init() {
+  const canvas = document.getElementById("c");
+  renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  renderer.setClearColor(DEBUG ? 0x12101c : 0x000000, DEBUG ? 1 : 0);
+  if (DEBUG) document.body.style.background = "#12101c";
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  // IMPORTANTE: las texturas VRoid/MToon están en sRGB. Sin esto, la piel se
+  // ve "lavada"/blanca. Lo dejamos en sRGB y sin tone mapping (MToon ya define el sombreado).
+  try { renderer.outputEncoding = THREE.sRGBEncoding; } catch (e) {}
+  try { renderer.toneMapping = THREE.NoToneMapping; } catch (e) {}
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(28, window.innerWidth / window.innerHeight, 0.1, 20);
+  camera.position.set(0, 1.25, 1.45);
+  camera.lookAt(0, 1.15, 0);
+
+  // Luces suaves: con las texturas en sRGB, la piel mantiene su tono.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.72));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
+  dir.position.set(1, 1.5, 1.2);
+  scene.add(dir);
+  // luz de relleno tenue desde el otro lado para que no quede una mitad oscura
+  const fill = new THREE.DirectionalLight(0xfff2ff, 0.3);
+  fill.position.set(-1.2, 0.8, 0.6);
+  scene.add(fill);
+
+  lookTarget = new THREE.Object3D();
+  scene.add(lookTarget);
+
+  clock = new THREE.Clock();
+
+  const loader = new THREE.GLTFLoader();
+  loader.register((parser) => new THREE_VRM.VRMLoaderPlugin(parser));
+  loader.load(
+    VRM_URL,
+    (gltf) => {
+      vrm = gltf.userData.vrm;
+      try { THREE_VRM.VRMUtils.removeUnnecessaryVertices(gltf.scene); } catch (e) {}
+      try { THREE_VRM.VRMUtils.removeUnnecessaryJoints(gltf.scene); } catch (e) {}
+      vrm.scene.rotation.y = BASE_TURN;
+      scene.add(vrm.scene);
+      if (vrm.lookAt) vrm.lookAt.target = lookTarget;
+
+      // --- ARREGLO PIEL BLANCA ---
+      // Las texturas de color (piel, cara, ropa) deben decodificarse como sRGB.
+      // Si no, se "lavan" y la piel se ve casi blanca. Forzamos sRGB en cada
+      // textura de color de cada material (MToon de VRoid incluido).
+      fixTextureColors(vrm.scene);
+
+      // --- Brazos pegados al cuerpo (de T-pose a brazos abajo) ---
+      const hum = vrm.humanoid;
+      if (hum) {
+        bones.lUp  = hum.getNormalizedBoneNode("leftUpperArm");
+        bones.rUp  = hum.getNormalizedBoneNode("rightUpperArm");
+        bones.lLow = hum.getNormalizedBoneNode("leftLowerArm");
+        bones.rLow = hum.getNormalizedBoneNode("rightLowerArm");
+        bones.head = hum.getNormalizedBoneNode("head");
+        bones.neck = hum.getNormalizedBoneNode("neck");
+        bones.chest = hum.getNormalizedBoneNode("chest");
+        bones.spine = hum.getNormalizedBoneNode("spine");
+        bones.hips = hum.getNormalizedBoneNode("hips");
+        bones.lShoulder = hum.getNormalizedBoneNode("leftShoulder");
+        bones.rShoulder = hum.getNormalizedBoneNode("rightShoulder");
+      }
+      applyArmPose();
+
+      const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode("head");
+      if (head) {
+        const p = new THREE.Vector3();
+        head.getWorldPosition(p);
+        // Camara mas atras y apuntando un poco mas abajo para que entre TODO el
+        // pelo (la parte de arriba de la cabeza ya no se corta).
+        camera.position.set(0, p.y + CAM_Y * 0.4, CAM_DIST);
+        camera.lookAt(0, p.y + CAM_Y, 0);
+      }
+      document.title = "VRM_OK";
+      hideMsg();
+    },
+    (prog) => { if (prog.total) msg("Cargando a Yue… " + Math.round(100*prog.loaded/prog.total) + "%"); },
+    (err) => { document.title = "VRM_ERROR"; msg("No pude cargar el modelo: " + err); console.error(err); }
+  );
+
+  window.addEventListener("resize", onResize);
+  animate();
+}
+
+function onResize() {
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+
+// Marca como sRGB las texturas de COLOR de todos los materiales (piel, cara,
+// ropa…). Sin esto, las texturas se interpretan como lineales, se ven "lavadas"
+// y la piel sale casi blanca. Los mapas de datos (normal/metal) se dejan igual.
+function fixTextureColors(root) {
+  const COLOR_KEYS = [
+    "map", "emissiveMap",
+    "shadeMultiplyTexture", "rimMultiplyTexture", "matcapTexture",
+  ];
+  root.traverse((obj) => {
+    if (!obj.isMesh && !obj.isSkinnedMesh) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    mats.forEach((m) => {
+      if (!m) return;
+      COLOR_KEYS.forEach((k) => {
+        const tex = m[k];
+        if (tex && tex.isTexture) {
+          try { tex.encoding = THREE.sRGBEncoding; } catch (e) {}
+          // API nueva de three (por si la versión la usa):
+          try { if ("colorSpace" in tex) tex.colorSpace = "srgb"; } catch (e) {}
+          tex.needsUpdate = true;
+        }
+      });
+      m.needsUpdate = true;
+    });
+  });
+}
+
+// Lleva los brazos desde la T-pose hasta quedar pegados al cuerpo (A-pose cerrada).
+// Z = bajar el brazo al costado · X = llevarlo adelante(+)/atras(-). En este rig,
+// con el brazo ya bajado, el eje que lo mueve adelante/atras es el X (no el Y).
+function applyArmPose(dt=0.016, p=EMOTION_PROFILES.neutral, t=0, g=null) {
+  const gh = (g && g.hombros) || 0;   // los hombros son el canal mas expresivo
+  const shoulderPulse = talking ? Math.sin(t * 8.5) * 0.018 : 0;
+  const lively = Math.min(0.050, (p.bounce || 0) * 1.8) * emotionIntensity;
+  const armWave = (p.armWave || 0) * Math.sin(t * (p.speed || 1) * 1.8) * emotionIntensity;
+  const shoulder = (p.shoulder || 0) * emotionIntensity + gh;
+  if (bones.lUp) {
+    bones.lUp.rotation.x = damp(bones.lUp.rotation.x, -ARM_FWD + shoulderPulse + armWave * 0.45, 11, dt);
+    bones.lUp.rotation.y = damp(bones.lUp.rotation.y, lively * Math.sin(t * p.speed) + armWave * 0.20, 9, dt);
+    bones.lUp.rotation.z = damp(bones.lUp.rotation.z, -ARM_DOWN + lively + shoulder + armWave, 11, dt);
+  }
+  if (bones.rUp) {
+    bones.rUp.rotation.x = damp(bones.rUp.rotation.x, -ARM_FWD + shoulderPulse - armWave * 0.45, 11, dt);
+    bones.rUp.rotation.y = damp(bones.rUp.rotation.y, -lively * Math.sin(t * p.speed) - armWave * 0.20, 9, dt);
+    bones.rUp.rotation.z = damp(bones.rUp.rotation.z, ARM_DOWN - lively - shoulder + armWave, 11, dt);
+  }
+  if (bones.lShoulder) bones.lShoulder.rotation.z = damp(bones.lShoulder.rotation.z, shoulder * 0.45, 9, dt);
+  if (bones.rShoulder) bones.rShoulder.rotation.z = damp(bones.rShoulder.rotation.z, -shoulder * 0.45, 9, dt);
+  if (bones.lLow) bones.lLow.rotation.z = damp(bones.lLow.rotation.z, -ARM_IN - armWave * 0.18, 11, dt);
+  if (bones.rLow) bones.rLow.rotation.z = damp(bones.rLow.rotation.z, ARM_IN + armWave * 0.18, 11, dt);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  if (vrm) {
+    const p = profile();
+    const speed = p.speed || 0.7;
+
+    // --- gestos: un delta limpio que se suma al final ---
+    const g = sampleGestures(dt);
+
+    // --- micro-sacadas: los ojos dan saltitos, no derivan como un radar ---
+    proxSacada -= dt;
+    if (proxSacada <= 0) {
+      sacadaObj.x = (Math.random() - 0.5) * 0.14;
+      sacadaObj.y = (Math.random() - 0.5) * 0.09;
+      proxSacada = 0.7 + Math.random() * 2.2;
+    }
+    sacada.x = damp(sacada.x, sacadaObj.x, 14, dt);
+    sacada.y = damp(sacada.y, sacadaObj.y, 14, dt);
+
+    // --- gestos automaticos: al hablar y en reposo ---
+    if (talking) {
+      proxGestoHabla -= dt;
+      if (proxGestoHabla <= 0) {
+        const n = GESTOS_AL_HABLAR[(Math.random() * GESTOS_AL_HABLAR.length) | 0];
+        playGesture(n, { gain: (0.35 + Math.random() * 0.3) * GESTURE_GAIN });
+        proxGestoHabla = 1.6 + Math.random() * 2.4;
+      }
+      proxGestoOcio = 4 + Math.random() * 5;
+    } else {
+      proxGestoOcio -= dt;
+      if (proxGestoOcio <= 0) {
+        const n = GESTOS_OCIOSOS[(Math.random() * GESTOS_OCIOSOS.length) | 0];
+        playGesture(n, { gain: (0.25 + Math.random() * 0.25) * GESTURE_GAIN });
+        proxGestoOcio = 6 + Math.random() * 8;
+      }
+    }
+
+    smoothLook.x = damp(smoothLook.x, look.x, 7.5, dt);
+    smoothLook.y = damp(smoothLook.y, look.y, 7.5, dt);
+
+    const mediaBeatHz = Math.max(0.55, Math.min(3.0, (mediaCompanion.tempo || 78) / 60));
+    const mediaBeat = mediaCompanion.active
+      ? Math.sin(t * Math.PI * 2 * mediaBeatHz) * 0.0045 * mediaCompanion.rhythm
+      : 0;
+    const bodyY = Math.sin(t * (1.15 + speed * 0.18)) * (p.bounce || 0.004) * emotionIntensity
+                + slowNoise(t, 2.1) * (p.bounce || 0.004) * NOISE_GAIN * emotionIntensity
+                + mediaBeat;
+    const bodyX = Math.sin(t * 18.0) * (p.shake || 0) * emotionIntensity;
+    base.bodyY = damp(base.bodyY, bodyY, 5.5, dt);
+    base.bodyX = damp(base.bodyX, bodyX, 11.0, dt);
+    vrm.scene.position.y = base.bodyY + g.cuerpoY;
+    vrm.scene.position.x = base.bodyX;
+
+    const mediaSway = mediaCompanion.active
+      ? Math.sin(t * Math.PI * mediaBeatHz) * 0.014 * mediaCompanion.rhythm
+      : 0;
+    const targetBodyTurn = BASE_TURN + Math.sin(t * speed * 0.55) * (p.sway || 0.018) + smoothLook.x * 0.16
+                         + slowNoise(t, 3.7) * (p.sway || 0.018) * NOISE_GAIN + mediaSway;
+    base.bodyRotY = damp(base.bodyRotY, targetBodyTurn, 6.5, dt);
+    base.bodyRotX = damp(base.bodyRotX, (p.lean || 0) * emotionIntensity, 5.8, dt);
+    vrm.scene.rotation.y = base.bodyRotY;
+    vrm.scene.rotation.x = base.bodyRotX + g.cuerpoRotX;
+
+    lookTarget.position.set((smoothLook.x + sacada.x) * 0.62,
+                            1.2 + (smoothLook.y + sacada.y) * 0.42,
+                            camera.position.z + 0.2);
+
+    // Movimiento corporal con transiciones amortiguadas: evita saltos entre emociones.
+    if (bones.hips) {
+      const hipMedia = mediaCompanion.active
+        ? Math.sin(t * Math.PI * mediaBeatHz) * 0.010 * mediaCompanion.rhythm : 0;
+      base.hipsZ = damp(base.hipsZ, Math.sin(t * speed * 0.62) * (p.sway || 0.018) * 0.35 + hipMedia, 5, dt);
+      base.hipsY = damp(base.hipsY, smoothLook.x * 0.035, 5, dt);
+      bones.hips.rotation.z = base.hipsZ;
+      bones.hips.rotation.y = base.hipsY;
+    }
+    if (bones.spine) {
+      base.spineZ = damp(base.spineZ, -Math.sin(t * speed * 0.62) * (p.sway || 0.018) * 0.25, 5, dt);
+      base.spineX = damp(base.spineX, Math.sin(t * 1.35) * 0.007, 5, dt);
+      bones.spine.rotation.z = base.spineZ;
+      bones.spine.rotation.x = base.spineX + g.chestX * 0.35;
+    }
+    if (bones.chest) {
+      const breath = Math.sin(t * 1.35) * 0.012;
+      base.chestX = damp(base.chestX, breath, 5, dt);
+      base.chestY = damp(base.chestY, smoothLook.x * 0.045, 5, dt);
+      bones.chest.rotation.x = base.chestX + g.chestX;
+      bones.chest.rotation.y = base.chestY;
+    }
+
+    applyArmPose(dt, p, t, g);
+
+    if (bones.head) {
+      const talkNod = talking ? Math.sin(t * 8.8) * 0.022 : 0;
+      const mediaNod = mediaCompanion.active
+        ? Math.sin(t * Math.PI * 2 * mediaBeatHz) * 0.014 * mediaCompanion.rhythm : 0;
+      const nod = Math.sin(t * speed * 1.05) * (p.nod || 0.02) + talkNod + mediaNod + (p.chin || 0)
+                + slowNoise(t, 5.2) * (p.nod || 0.02) * NOISE_GAIN;
+      const away = (p.lookAway || 0) * Math.sin(t * 0.34);
+      const turn = Math.sin(t * speed * 0.72) * (p.turn || 0.03) + smoothLook.x * 0.13 + away
+                 + slowNoise(t, 6.6) * (p.turn || 0.03) * NOISE_GAIN;
+      const tilt = Math.sin(t * speed * 0.8) * (p.tilt || 0.02)
+                 + slowNoise(t, 7.9) * (p.tilt || 0.02) * NOISE_GAIN;
+      base.headX = damp(base.headX, nod + smoothLook.y * 0.10, 8.5, dt);
+      base.headY = damp(base.headY, turn, 8.5, dt);
+      base.headZ = damp(base.headZ, tilt, 8.5, dt);
+      // Tope final: aunque idle y gesto se sumen, la cabeza nunca sale del rango
+      // que el VRM aguanta sin verse rota.
+      bones.head.rotation.x = clamp(base.headX + g.headX, -0.40, 0.40);
+      bones.head.rotation.y = clamp(base.headY + g.headY, -0.52, 0.52);
+      bones.head.rotation.z = clamp(base.headZ + g.headZ, -0.38, 0.38);
+    }
+    if (bones.neck) {
+      base.neckY = damp(base.neckY, smoothLook.x * 0.045, 7, dt);
+      base.neckZ = damp(base.neckZ, Math.sin(t * speed * 0.8) * (p.tilt || 0.02) * 0.22, 7, dt);
+      // El cuello acompana a la cabeza un tercio: asi el giro se reparte y no
+      // parece que la cabeza gire sobre un poste.
+      bones.neck.rotation.y = clamp(base.neckY + g.headY * 0.30, -0.26, 0.26);
+      bones.neck.rotation.z = clamp(base.neckZ + g.headZ * 0.30, -0.20, 0.20);
+      bones.neck.rotation.x = clamp(g.headX * 0.25, -0.16, 0.16);
+    }
+
+    const em = vrm.expressionManager;
+    if (em) {
+      // Sobre de expresion: pico al llegar la emocion y luego asentamiento.
+      exprPico = damp(exprPico, 1.0, 2.2, dt);
+      const targets = p.expr || {};
+      ["happy", "angry", "sad", "relaxed", "surprised"].forEach((name) => {
+        // Respiración lenta 0.85..1.00 por canal: la cara no se queda estática.
+        const br = EXPR_BREATH[name];
+        const breath = br ? (0.925 + 0.075 * Math.sin(t * br.f + br.p)) : 1;
+        const target = Math.min(1, (targets[name] || 0) * emotionIntensity * exprPico * breath);
+        expressionValues[name] = damp(expressionValues[name], target, 9.0, dt);
+        em.setValue(name, expressionValues[name]);
+      });
+
+      // Parpadeo progresivo, no binario.
+      blinkT += dt;
+      let blinkTarget = 0;
+      if (blinkT > nextBlink) {
+        const phase = (blinkT - nextBlink) / 0.16;
+        blinkTarget = phase < 0.5 ? phase * 2 : Math.max(0, (1 - phase) * 2);
+        if (phase >= 1) {
+          blinkT = 0;
+          const blinkScale = p.blink || 1;
+          if (forcedBlinks > 0) {
+            forcedBlinks -= 1;
+            nextBlink = 0.10;   // segundo parpadeo casi pegado -> "doble" de sobresalto
+          } else {
+            nextBlink = (1.8 + Math.random() * 3.4) * blinkScale;
+          }
+        }
+      }
+      // En fragmentos tranquilos puede entrecerrar/cerrar los ojos por un
+      // instante, sin anular el parpadeo natural.
+      if (mediaCompanion.active && mediaCompanion.calm > 0.50 && !talking) {
+        const calmWave = Math.max(0, Math.sin(t * 0.42) - 0.92) / 0.08;
+        blinkTarget = Math.max(blinkTarget, Math.min(0.72, calmWave * mediaCompanion.calm));
+      }
+      blinkValue = damp(blinkValue, blinkTarget, 24, dt);
+      em.setValue("blink", blinkValue);
+
+      // Movimiento labial: lip-sync REAL por amplitud del audio, con el seno de
+      // antes como plan B si no llega envelope (voz sin envelope, fallo, etc.).
+      let mouthTarget = 0;
+      if (talking) {
+        const envVal = sampleLipEnv();   // null si no hay envelope válido
+        if (envVal !== null) {
+          // Amplitud real del audio. Piso pequeño para que en consonantes muy
+          // suaves la boca no quede del todo cerrada de golpe.
+          mouthTarget = 0.14 + 0.86 * envVal;
+        } else {
+          // FALLBACK (plan B): comportamiento de seno original, intacto.
+          mouthTarget = (0.36 + 0.34 * (Math.sin(t * 15.5) * 0.5 + 0.5)
+                              + 0.18 * (Math.sin(t * 8.1 + 0.8) * 0.5 + 0.5));
+        }
+      }
+      mouthValue = damp(mouthValue, mouthTarget, talking ? 18 : 13, dt);
+      // Mismo reparto de siempre entre los visemas aa/ih/ou.
+      em.setValue("aa", mouthValue);
+      em.setValue("ih", mouthValue * 0.22);
+      em.setValue("ou", mouthValue * 0.10);
+    }
+    vrm.update(dt);
+  }
+  renderer.render(scene, camera);
+}
+
+// ===== API desde Python =====
+function setTalking(v) { talking = !!v; }
+function setEmotion(name, intensity, durationMs) {
+  const previa = emotion;
+  emotion = EMOTION_PROFILES[name] ? name : "neutral";
+  emotionIntensity = Math.max(0.25, Math.min(1, Number(intensity || 1)));
+  emoUntil = performance.now() + Math.max(1200, Number(durationMs || 4800));
+  // La emocion ahora LLEGA: pico de expresion + el gesto que le corresponde.
+  // Solo si cambia de verdad, para no repetir el mismo gesto en cada frase.
+  if (previa !== emotion) {
+    exprPico = 1.28;
+    // Doble parpadeo de sobresalto al entrar en una emoción fuerte.
+    if (isHighIntensityEmotion(emotion)) triggerStartleBlink();
+    const lista = GESTO_DE_EMOCION[emotion] || [];
+    lista.forEach((g, i) => {
+      const disparo = () => playGesture(g, { gain: emotionIntensity * GESTURE_GAIN });
+      if (i === 0) disparo(); else setTimeout(disparo, 180 * i);
+    });
+    proxGestoOcio = 5 + Math.random() * 5;
+  }
+}
+// Disponible desde Python: pet.play_gesture("asentir")
+function playGestureExt(nombre, gain) {
+  return playGesture(nombre, { gain: (gain === undefined ? 1 : gain) * GESTURE_GAIN });
+}
+function lookAt(x, y) { look.x = Math.max(-1, Math.min(1, x)); look.y = Math.max(-1, Math.min(1, y)); }
+function setMediaCompanion(data) {
+  data = data || {};
+  const cap = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+  mediaCompanion.active = !!data.active;
+  mediaCompanion.rhythm = cap(data.rhythm);
+  mediaCompanion.tempo = Math.max(0, Math.min(240, Number(data.tempo_bpm || data.tempo) || 0));
+  mediaCompanion.energy = cap(data.energy);
+  mediaCompanion.calm = cap(data.calm);
+  mediaCompanion.look = data.look_to_screen !== false;
+}
+</script>
+</body>
+</html>

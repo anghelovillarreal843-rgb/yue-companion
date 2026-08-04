@@ -1,0 +1,31 @@
+====================================================================
+ LIBRERIAS 3D LOCALES (para que el avatar VRM cargue rapido y SIN
+ depender de internet cada vez que abres a Yue)
+====================================================================
+
+Si NO pones nada aqui, Yue intentara descargar estas librerias de
+internet (unpkg.com) cada vez que arranca. Eso a veces es lento o
+falla, y entonces se ve el PNG de respaldo en lugar del 3D.
+
+Para que cargue SIEMPRE y rapido, descarga estos 3 archivos UNA vez
+y dejalos en esta carpeta (assets/vendor/) con EXACTAMENTE estos nombres:
+
+  1) three.min.js
+     https://unpkg.com/three@0.137.0/build/three.min.js
+
+  2) GLTFLoader.js
+     https://unpkg.com/three@0.137.0/examples/js/loaders/GLTFLoader.js
+
+  3) three-vrm.js
+     https://unpkg.com/@pixiv/three-vrm@1/lib/three-vrm.js
+
+Como descargarlos:
+ - Abre cada enlace en el navegador y guarda la pagina como archivo .js
+   (clic derecho -> Guardar como), o
+ - PowerShell (Windows), dentro de esta carpeta:
+     curl -o three.min.js   https://unpkg.com/three@0.137.0/build/three.min.js
+     curl -o GLTFLoader.js   https://unpkg.com/three@0.137.0/examples/js/loaders/GLTFLoader.js
+     curl -o three-vrm.js    https://unpkg.com/@pixiv/three-vrm@1/lib/three-vrm.js
+
+IMPORTANTE: respeta los nombres de arriba. El visor usa estos primero y,
+solo si faltan, recurre a internet.
