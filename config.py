@@ -655,3 +655,56 @@ VISION_AVATAR_MIN_GAP = float(os.getenv("VISION_AVATAR_MIN_GAP", "6"))
 # semiancho de la "zona central" para considerar que mira de frente (0..0.5).
 VISION_ABSENCE_SECONDS = float(os.getenv("VISION_ABSENCE_SECONDS", "600"))
 VISION_ATTENTION_CENTER_BAND = float(os.getenv("VISION_ATTENTION_CENTER_BAND", "0.22"))
+
+
+# ===========================================================================
+# SISTEMA DE VISIÓN POR CÁMARA — MediaPipe Tasks (paquete vision/)  [ADITIVO]
+# ---------------------------------------------------------------------------
+# Bloque agregado por la integración de visión artificial con una sola cámara.
+# NO redefine VISION_ENABLED (esa es la visión de PANTALLA). El interruptor
+# maestro de ESTE sistema es VISION_MP_ENABLED y está APAGADO por defecto para
+# no pelear por la webcam con el observador clásico ni con core.vision.
+# El paquete vision/ igual funciona sin este bloque (tiene sus propios valores
+# por defecto); esto es para descubribilidad y para poder sobrescribir.
+# ===========================================================================
+VISION_MP_ENABLED = _truthy(os.getenv("VISION_MP_ENABLED", "false"))
+
+# FPS de captura de la cámara para el pipeline MediaPipe (0 = usa el del perfil).
+CAMERA_TARGET_FPS = float(os.getenv("CAMERA_TARGET_FPS", "0") or "0")
+
+# Perfil de rendimiento: low | balanced | high (ajusta resolución y FPS base).
+VISION_PERFORMANCE_MODE = os.getenv("VISION_PERFORMANCE_MODE", "balanced").strip().lower()
+
+# Módulos (on/off). Holistic apaga automáticamente rostro-landmarks/pose/gestos.
+VISION_FACE_DETECTOR_ENABLED = _truthy(os.getenv("VISION_FACE_DETECTOR_ENABLED", "true"))
+VISION_FACE_LANDMARKER_ENABLED = _truthy(os.getenv("VISION_FACE_LANDMARKER_ENABLED", "true"))
+VISION_POSE_ENABLED = _truthy(os.getenv("VISION_POSE_ENABLED", "true"))
+VISION_GESTURE_ENABLED = _truthy(os.getenv("VISION_GESTURE_ENABLED", "true"))
+VISION_OBJECTS_ENABLED = _truthy(os.getenv("VISION_OBJECTS_ENABLED", "true"))
+VISION_IMAGE_CLASSIFIER_ENABLED = _truthy(os.getenv("VISION_IMAGE_CLASSIFIER_ENABLED", "false"))
+VISION_IMAGE_SEGMENTER_ENABLED = _truthy(os.getenv("VISION_IMAGE_SEGMENTER_ENABLED", "false"))
+VISION_INTERACTIVE_SEGMENTER_ENABLED = _truthy(os.getenv("VISION_INTERACTIVE_SEGMENTER_ENABLED", "false"))
+VISION_HOLISTIC_ENABLED = _truthy(os.getenv("VISION_HOLISTIC_ENABLED", "false"))
+
+# Frecuencias por módulo (FPS). 0 = usa el valor del perfil de rendimiento.
+VISION_FACE_DETECTOR_FPS = float(os.getenv("VISION_FACE_DETECTOR_FPS", "0") or "0")
+VISION_FACE_LANDMARKER_FPS = float(os.getenv("VISION_FACE_LANDMARKER_FPS", "0") or "0")
+VISION_POSE_FPS = float(os.getenv("VISION_POSE_FPS", "0") or "0")
+VISION_GESTURE_FPS = float(os.getenv("VISION_GESTURE_FPS", "0") or "0")
+VISION_OBJECT_FPS = float(os.getenv("VISION_OBJECT_FPS", "0") or "0")
+VISION_CLASSIFIER_FPS = float(os.getenv("VISION_CLASSIFIER_FPS", "0") or "0")
+
+# Límites de detección.
+VISION_MAX_FACES = int(os.getenv("VISION_MAX_FACES", "3"))
+VISION_MAX_HANDS = int(os.getenv("VISION_MAX_HANDS", "2"))
+
+# Confianzas mínimas (0..1).
+VISION_FACE_MIN_CONFIDENCE = float(os.getenv("VISION_FACE_MIN_CONFIDENCE", "0.5"))
+VISION_POSE_MIN_CONFIDENCE = float(os.getenv("VISION_POSE_MIN_CONFIDENCE", "0.5"))
+VISION_GESTURE_MIN_CONFIDENCE = float(os.getenv("VISION_GESTURE_MIN_CONFIDENCE", "0.6"))
+VISION_OBJECT_MIN_CONFIDENCE = float(os.getenv("VISION_OBJECT_MIN_CONFIDENCE", "0.5"))
+
+# Privacidad y depuración. Por diseño NO se guardan ni se envían imágenes.
+VISION_SAVE_FRAMES = _truthy(os.getenv("VISION_SAVE_FRAMES", "false"))
+VISION_EXTERNAL_UPLOAD = _truthy(os.getenv("VISION_EXTERNAL_UPLOAD", "false"))
+VISION_DEBUG_OVERLAY = _truthy(os.getenv("VISION_DEBUG_OVERLAY", "false"))

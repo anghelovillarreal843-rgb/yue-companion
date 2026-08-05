@@ -1,0 +1,65 @@
+# ============================================================
+# YUE Companion · .gitignore (FASE 1 · seguridad y limpieza)
+# ============================================================
+
+# --- Secretos: NUNCA subir el .env real ---
+.env
+.env.*
+!.env.example
+
+# --- Datos personales / privados del usuario ---
+data/
+!data/.keep
+*.db
+*.sqlite
+*.sqlite3
+*.db.pre_restore_*
+
+# --- Cachés de Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Entornos virtuales ---
+.venv/
+venv/
+env/
+
+# --- Empaquetado / build ---
+build/
+dist/
+*.spec.bak
+
+# --- Multimedia y audio generado ---
+*.mp3
+*.wav
+*.ogg
+*.mp4
+
+# --- Documentos y materiales generados en pruebas ---
+informe_*.docx
+trabajo_*.pptx
+*_generado.*
+Tabla de multiplicar*.xlsx
+
+# --- Logs ---
+*.log
+*.jsonl
+data/logs/
+
+# --- Modelos descargables (no versionar; se bajan aparte) ---
+assets/kokoro/*.onnx
+assets/kokoro/*.bin
+
+# --- Sistema operativo / editores ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*~
+*.tmp
+*.bak

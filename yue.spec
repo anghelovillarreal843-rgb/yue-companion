@@ -3,7 +3,7 @@
 # Uso:  pyinstaller yue.spec --noconfirm
 # Resultado:  dist\YUE\YUE.exe  (carpeta lista para usar / comprimir / distribuir)
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 block_cipher = None
 
@@ -12,7 +12,12 @@ datas = [
     ("ui/avatar.html", "ui"),     # el visor 3D del avatar
     ("assets", "assets"),         # yue.vrm, yue.png y la música
     (".env.example", "."),        # plantilla de configuración
+    ("models/vision", "models/vision"),  # modelos .task/.tflite de visión (si están)
 ]
+
+# MediaPipe Tasks necesita sus grafos internos (.binarypb/.tflite) empaquetados;
+# sin esto, el sistema de visión falla al arrancar dentro del .exe. [ADITIVO]
+datas += collect_data_files("mediapipe")
 
 # Módulos que PyInstaller a veces no detecta solo.
 hiddenimports = []

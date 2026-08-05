@@ -546,6 +546,18 @@ class Controller(QObject):
             print("[vision-v3] no se pudo enganchar el sistema de percepción:", exc)
             self.vision_v3 = None
 
+        # Sistema de visión MediaPipe Tasks (paquete vision/, ADITIVO). Inerte si
+        # VISION_MP_ENABLED=false (por defecto): no abre la cámara ni importa
+        # MediaPipe. Al activarlo, marshala emoción/voz/estado al hilo de la
+        # interfaz. Si lo enciendes, usa CAMERA_ENABLED=false para el observador
+        # clásico o una CAMERA_INDEX distinta para no pelear por la misma webcam.
+        try:
+            from vision import integration as vision_mp
+            self.vision_mp = vision_mp.attach(self)
+        except Exception as exc:
+            print("[vision-mp] no se pudo enganchar el sistema de visión:", exc)
+            self.vision_mp = None
+
     # ---------- interfaz ----------
     def toggle_chat(self):
         if self.chat.isVisible():
@@ -2676,6 +2688,17 @@ class Controller(QObject):
             self.camera.set_fast_mode(False)
             self._yue_say("Listo, solté el cursor. Control por cabeza desactivado.")
 
+    def _on_vision_status(self, text, active):
+        """Estado del sistema de visión por cámara (llega en el hilo de la UI).
+
+        Aditivo y silencioso: solo registra en consola. Si quieres verlo en el
+        chat, cambia el print por self._yue_say(text).
+        """
+        try:
+            print(f"[vision-mp] {'ON' if active else 'off'}: {text}")
+        except Exception:
+            pass
+
     def _handle_command(self, text):
         parts = text.split(" ", 1)
         command = parts[0].lower()
@@ -2730,7 +2753,25 @@ class Controller(QObject):
         elif command in {"/diagvoz", "/diagmicro", "/diagmic", "/diagoido", "/diagoído"}:
             self._diagnose_voice()
         elif command in {"/camara", "/cámara"}:
-            self._yue_say(self.camera.describe())
+            # Aditivo: si el sistema de visión MediaPipe está enganchado, deja que
+            # maneje on/off; si no reconoce el argumento, cae al comportamiento
+            # clásico de siempre (self.camera.describe()).
+            _resp = None
+            try:
+                from vision import commands as _vision_cmds
+                _resp = _vision_cmds.handle(getattr(self, "vision_mp", None), command, arg)
+            except Exception:
+                _resp = None
+            self._yue_say(_resp if _resp else self.camera.describe())
+        elif command in {"/vision", "/visión"}:
+            # Comandos del sistema de visión por cámara (MediaPipe Tasks).
+            _resp = None
+            try:
+                from vision import commands as _vision_cmds
+                _resp = _vision_cmds.handle(getattr(self, "vision_mp", None), command, arg)
+            except Exception as _exc:
+                _resp = f"No pude consultar la visión: {_exc}"
+            self._yue_say(_resp or "El sistema de visión no está disponible.")
         elif command == "/recuerda" and arg:
             self.memory.add_fact(arg)
             self._yue_say("Lo guardé en mi memoria.")
