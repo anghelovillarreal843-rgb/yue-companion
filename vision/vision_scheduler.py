@@ -44,18 +44,32 @@ class WorkerMetrics:
 
 
 class _Worker(threading.Thread):
+    """Hilo trabajador de un módulo de visión.
+
+    CORRECCIÓN IMPORTANTE: el atributo del evento de parada se llama
+    `_stop_event`, NO `_stop`. `threading.Thread` ya tiene un método privado
+    `_stop()` que la propia biblioteca estándar invoca desde `join()` y desde
+    `is_alive()` en cuanto el hilo termina. Guardar ahí un `Event` lo tapaba, y
+    al cerrar saltaba:
+
+        TypeError: 'Event' object is not callable
+
+    Era un fallo intermitente (dependía de si el hilo ya había terminado al
+    hacer join) que podía reventar el apagado de YUE.
+    """
+
     def __init__(self, name: str, fps: float, job, stop_event: threading.Event) -> None:
         super().__init__(name=f"Vision-{name}", daemon=True)
         self.metrics = WorkerMetrics(name=name, target_fps=max(0.0, fps))
         self._job = job
-        self._stop = stop_event
+        self._stop_event = stop_event
         self._interval = 1.0 / fps if fps > 0 else 1.0
         self._enabled = fps > 0
 
     def run(self) -> None:
         if not self._enabled:
             return
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             t0 = time.perf_counter()
             try:
                 self._job()
@@ -66,7 +80,7 @@ class _Worker(threading.Thread):
             self.metrics.record(infer_ms)
             # Duerme lo que falte para respetar el FPS (nunca acumula trabajo).
             remaining = self._interval - (time.perf_counter() - t0)
-            self._stop.wait(max(0.0, remaining))
+            self._stop_event.wait(max(0.0, remaining))
 
 
 class VisionScheduler:
@@ -76,11 +90,23 @@ class VisionScheduler:
         self._started = False
 
     def add(self, name: str, fps: float, job) -> None:
-        """Registra un trabajo `job()` a `fps` cuadros por segundo (0 = desactivado)."""
+        """Registra un trabajo `job()` a `fps` cuadros por segundo (0 = desactivado).
+
+        CORRECCIÓN: si el planificador YA está en marcha, el hilo se arranca aquí
+        mismo. Antes solo se guardaba en la lista y `start()` no volvía a pasar,
+        así que cualquier módulo registrado en caliente —por ejemplo el de
+        landmarks del control por cabeza, que solo se añade al activarlo— quedaba
+        inerte en silencio: aparecía en las métricas con 0 pasadas y nadie se
+        enteraba de que no estaba corriendo.
+        """
         if fps <= 0:
             log.info("Módulo %s desactivado (FPS=0).", name)
             return
-        self._workers.append(_Worker(name, fps, job, self._stop))
+        worker = _Worker(name, fps, job, self._stop)
+        self._workers.append(worker)
+        if self._started and not self._stop.is_set():
+            worker.start()
+            log.info("Módulo %s añadido en caliente (%.0f FPS).", name, fps)
 
     def start(self) -> None:
         if self._started:
@@ -94,8 +120,13 @@ class VisionScheduler:
     def stop(self) -> None:
         self._stop.set()
         for w in self._workers:
-            if w.is_alive():
-                w.join(timeout=2.0)
+            # Cinturón y tirantes: un fallo al cerrar UN hilo no debe impedir
+            # que se cierren los demás ni tumbar el apagado de YUE.
+            try:
+                if w.is_alive():
+                    w.join(timeout=2.0)
+            except Exception as exc:
+                log.warning("No pude cerrar el hilo %s: %s", w.name, exc)
         self._started = False
 
     def metrics(self) -> list[WorkerMetrics]:

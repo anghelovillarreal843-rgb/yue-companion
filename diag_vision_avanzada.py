@@ -41,8 +41,38 @@ def marca(ok: bool) -> str:
     return "[ OK ]" if ok else "[FALTA]"
 
 
+def registry_tiene_landmarker() -> bool:
+    """¿Está el modelo que necesita el control por cabeza?"""
+    try:
+        from vision.models.model_registry import ModelRegistry
+        return ModelRegistry().verify("face_landmarker").valid
+    except Exception:
+        return False
+
+
 def main() -> int:
     titulo("YUE — Diagnóstico de visión avanzada")
+
+    # ---------------- versión e integridad ----------------
+    # Va PRIMERO a propósito: si la copia que se ejecuta es antigua, todo lo
+    # demás que salga por pantalla puede confundir más que ayudar.
+    copia_al_dia = True
+    try:
+        from vision import version as version_mod
+        print(version_mod.informe())
+        copia_al_dia = version_mod.al_dia()
+    except Exception as exc:
+        copia_al_dia = False
+        print("  AVISO: no encuentro vision/version.py.")
+        print("  Estás ejecutando una copia ANTIGUA del proyecto.")
+        print(f"  ({exc})")
+
+    if not copia_al_dia:
+        print()
+        print("  " + "!" * 62)
+        print("  Sigo con el diagnóstico, pero los arreglos recientes NO están")
+        print("  en esta copia. Actualiza antes de sacar conclusiones.")
+        print("  " + "!" * 62)
 
     # ---------------- librerías ----------------
     titulo("1. Librerías")
@@ -74,7 +104,8 @@ def main() -> int:
 
     print(f"  VISION_MP_ENABLED ............ {cfg.enabled}")
     print(f"  VISION_PERCEPTION_ENABLED .... {cfg.perception_enabled}")
-    print(f"  CAMERA_ENABLED ............... {cfg.camera_enabled}")
+    print(f"  CAMERA_ENABLED (clásico) ..... {cfg.legacy_camera_enabled}")
+    print(f"  Cámara del motor nuevo ....... {cfg.camera_enabled}")
     print(f"  Cámara ....................... índice {cfg.camera_index}, "
           f"{cfg.width}x{cfg.height} @ {cfg.target_fps:.0f} FPS")
     print(f"  Perfil de rendimiento ........ {cfg.performance_mode}")
@@ -90,15 +121,66 @@ def main() -> int:
         print("\n  AVISO: el sistema está APAGADO. Pon VISION_MP_ENABLED=true "
               "en el .env para usarlo.")
 
+    # ---------------- coherencia de la configuración ----------------
+    # Existe porque es fácil dejar una combinación que se contradice a sí misma
+    # y luego no entender por qué "no ve nada".
+    titulo("2b. Coherencia de la configuración")
+    problemas: list[tuple[str, str]] = []
+
+    if cfg.enabled and not cfg.camera_enabled:
+        if cfg.replace_legacy:
+            problemas.append((
+                "El motor está migrado pero su cámara está apagada.",
+                "Quita VISION_CAMERA_ENABLED=false del .env (o ponlo en true)."))
+        else:
+            problemas.append((
+                "VISION_MP_ENABLED=true pero CAMERA_ENABLED=false: el motor "
+                "nuevo hereda ese apagado y se queda sin cámara.",
+                "Si querías apagar SOLO el observador clásico, añade "
+                "VISION_REPLACE_LEGACY=true (o VISION_CAMERA_ENABLED=true)."))
+
+    if cfg.enabled and cfg.replace_legacy and cfg.legacy_camera_enabled:
+        problemas.append((
+            "Migración activa pero el observador clásico sigue encendido: "
+            "arranca antes y toma la webcam.",
+            "Pon CAMERA_ENABLED=false en el .env."))
+
+    if not cfg.enabled and cfg.replace_legacy:
+        problemas.append((
+            "VISION_REPLACE_LEGACY=true no hace nada con VISION_MP_ENABLED=false.",
+            "Pon VISION_MP_ENABLED=true, o quita la migración."))
+
+    if cfg.enabled and not cfg.perception_enabled:
+        problemas.append((
+            "VISION_PERCEPTION_ENABLED=false: no hay OCR, ni acciones, ni "
+            "descripción de habitación, ni emociones.",
+            "Ponlo en true salvo que quieras solo el pipeline básico."))
+
+    if cfg.ocr_enabled and not any(_hay(m) for m in
+                                   ("paddleocr", "easyocr", "pytesseract")):
+        problemas.append((
+            "El OCR está activado pero no hay ningún motor instalado.",
+            "pip install easyocr   (o paddleocr)"))
+
+    if not problemas:
+        print("  Sin contradicciones: la configuración es coherente.")
+    else:
+        for i, (problema, solucion) in enumerate(problemas, 1):
+            print(f"  {i}. {problema}")
+            print(f"     -> {solucion}")
+            print()
+
     # ---------------- conflicto de cámaras ----------------
     titulo("3. Conflicto entre sistemas de cámara")
     try:
         import config as yue_config
-        clasico = bool(getattr(yue_config, "CAMERA_ENABLED", True))
         v3 = bool(getattr(yue_config, "VISION_V3_ENABLED", False))
         indice_clasico = int(getattr(yue_config, "CAMERA_INDEX", 0))
     except Exception:
-        clasico, v3, indice_clasico = True, False, 0
+        v3, indice_clasico = False, 0
+    # Con la migración activa el clásico ya no abre la webcam aunque
+    # CAMERA_ENABLED estuviera en true: lo sustituye el adaptador.
+    clasico = bool(cfg.legacy_camera_enabled) and not cfg.replace_legacy
 
     activos = []
     if clasico:
@@ -115,8 +197,22 @@ def main() -> int:
         mismos = (clasico and cfg.enabled and indice_clasico == cfg.camera_index)
         if mismos or v3:
             print("\n  PROBLEMA: hay más de un sistema queriendo la MISMA webcam.")
-            print("  Solución: pon CAMERA_ENABLED=false y VISION_V3_ENABLED=false,")
-            print("  o dale a cada sistema un CAMERA_INDEX distinto.")
+            print("  Con una sola cámara, el arreglo recomendado es migrar al motor")
+            print("  nuevo y apagar el clásico. En el .env:")
+            print()
+            print("    VISION_REPLACE_LEGACY=true")
+            print("    CAMERA_ENABLED=false")
+            print("    VISION_V3_ENABLED=false")
+            print()
+            print("  El control del cursor por cabeza SIGUE funcionando: el motor")
+            print("  entrega los landmarks igual que el observador clásico.")
+            if not registry_tiene_landmarker():
+                print()
+                print("  OJO: para el control por cabeza necesitas face_landmarker.task.")
+                print("  Instálalo con:  python tools/download_vision_models.py --minimo")
+            print()
+            print("  Alternativa (si tienes DOS webcams): dale a cada sistema un")
+            print("  CAMERA_INDEX distinto y déjalos convivir.")
         else:
             print("\n  Hay varios sistemas activos, pero con índices distintos: correcto.")
     elif activos:
@@ -191,7 +287,8 @@ def main() -> int:
     try:
         from vision.privacy_manager import from_settings
         privacidad = from_settings(cfg)
-        privacidad.set_camera(True)
+        # Refleja el estado real configurado, sin fingir que está encendida.
+        privacidad.set_camera(bool(cfg.enabled and cfg.camera_enabled))
         print("  " + privacidad.describe_es().replace("; ", "\n  · "))
         estado = privacidad.state()
         print()
@@ -258,6 +355,10 @@ def main() -> int:
         print("  Omitida. Añade  --camara  para abrirla 5 segundos y medir FPS.")
 
     titulo("Resumen")
+    if not copia_al_dia:
+        print("  ATENCIÓN: esta copia del proyecto NO está al día.")
+        print("  Revisa el aviso del principio antes que nada.")
+        print()
     print("  Documentación completa:  docs/VISION_AVANZADA.md")
     print("  Pruebas:                 python -m unittest tests.test_vision_avanzada")
     print("  Dentro de YUE:           /vision capacidades   |   /vision modelos")

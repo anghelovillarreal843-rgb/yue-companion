@@ -225,8 +225,12 @@ class VisionSettings:
     model_variant: str = "full"
     allow_download: bool = False
 
+    # Accesibilidad (control del cursor por cabeza)
+    head_control_fps: float = 18.0
+
     # Migración
     replace_legacy: bool = False
+    legacy_camera_enabled: bool = True
     auto_search_camera: bool = True
     max_camera_index: int = 4
 
@@ -241,9 +245,28 @@ def load() -> VisionSettings:
     pose = get_bool("VISION_POSE_ENABLED", True) and not holistic
     gesture = get_bool("VISION_GESTURE_ENABLED", True) and not holistic
 
+    # ------------------------------------------------------------------
+    # CORRECCIÓN (contradicción real detectada en uso): `CAMERA_ENABLED` es el
+    # interruptor del observador CLÁSICO. Al migrar hay que apagarlo para que no
+    # pelee por la webcam... pero gobernaba TAMBIÉN al sistema nuevo, así que
+    # apagarlo dejaba a YUE sin visión de ninguna clase.
+    #
+    # Ahora el sistema nuevo tiene su propio interruptor:
+    #   - `VISION_CAMERA_ENABLED` explícito manda siempre,
+    #   - si no está y `VISION_REPLACE_LEGACY=true`, el motor nuevo ES el sistema
+    #     de cámara: se enciende aunque `CAMERA_ENABLED=false` (que en ese caso
+    #     solo significa "el observador clásico no abre la webcam"),
+    #   - si no está y no hay migración, se hereda `CAMERA_ENABLED` como antes,
+    #     de modo que quien tenía la cámara apagada la sigue teniendo apagada.
+    # ------------------------------------------------------------------
+    legacy_camera = get_bool("CAMERA_ENABLED", True)
+    replace_legacy = get_bool("VISION_REPLACE_LEGACY", False)
+    camera_enabled = get_bool("VISION_CAMERA_ENABLED",
+                              True if replace_legacy else legacy_camera)
+
     return VisionSettings(
         enabled=get_bool("VISION_MP_ENABLED", False),
-        camera_enabled=get_bool("CAMERA_ENABLED", True),
+        camera_enabled=camera_enabled,
         camera_index=get_int("CAMERA_INDEX", 0),
         width=get_int("CAMERA_WIDTH", preset.width),
         height=get_int("CAMERA_HEIGHT", preset.height),
@@ -318,8 +341,13 @@ def load() -> VisionSettings:
         model_variant=get_str("VISION_MODEL_VARIANT", "full"),
         allow_download=get_bool("VISION_ALLOW_DOWNLOAD", False),
 
+        # Control del cursor por cabeza: los landmarks van a más FPS que el
+        # resto, porque el cursor se nota si va lento.
+        head_control_fps=get_fps("VISION_HEAD_CONTROL_FPS", 18.0),
+
         # Migración desde el observador clásico
-        replace_legacy=get_bool("VISION_REPLACE_LEGACY", False),
+        replace_legacy=replace_legacy,
+        legacy_camera_enabled=legacy_camera,
         auto_search_camera=get_bool("VISION_AUTO_SEARCH_CAMERA", True),
         max_camera_index=get_int("VISION_MAX_CAMERA_INDEX", 4),
     )

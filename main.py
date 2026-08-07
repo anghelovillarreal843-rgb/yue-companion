@@ -574,6 +574,11 @@ class Controller(QObject):
                     status_callback=self._camera_bridge.status.emit,
                     context_max_age=float(getattr(config, "CAMERA_CONTEXT_MAX_AGE", 8.0)),
                 )
+                # El control por cabeza se reengancha al adaptador: el motor
+                # nuevo entrega los landmarks crudos igual que el clásico, así
+                # que el cursor sigue funcionando con UNA sola webcam.
+                if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
+                    self.camera.set_landmark_consumer(self.head_control.process_landmarks)
                 self.camera.start()
                 print("[vision-mp] migración activa: CameraObserver -> adaptador de percepción.")
         except Exception as exc:

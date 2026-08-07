@@ -1112,5 +1112,227 @@ class TestBackendCamara(unittest.TestCase):
         self.assertEqual(espia.avisos, 1)
 
 
+class TestPlanificador(unittest.TestCase):
+    """Regresión de dos fallos del planificador que rompían el cierre y el cursor."""
+
+    def test_stop_no_lanza_typeerror(self):
+        """`_Worker._stop` tapaba `threading.Thread._stop`, que la stdlib llama."""
+        from vision.vision_scheduler import VisionScheduler
+        sch = VisionScheduler()
+        sch.add("rapido", 50.0, lambda: None)
+        sch.start()
+        time.sleep(0.25)
+        try:
+            sch.stop()        # antes: TypeError: 'Event' object is not callable
+        except TypeError as exc:
+            self.fail(f"stop() lanzó TypeError: {exc}")
+        sch.stop()            # doble stop: también debe ser inofensivo
+        vivos = [t.name for t in threading.enumerate() if t.name.startswith("Vision-")]
+        self.assertEqual(vivos, [])
+
+    def test_worker_no_tapa_atributos_de_thread(self):
+        """Ningún atributo del worker puede pisar la API interna de Thread."""
+        from vision.vision_scheduler import _Worker
+        worker = _Worker("x", 10.0, lambda: None, threading.Event())
+        self.assertTrue(callable(getattr(worker, "_stop", None)),
+                        "_stop dejó de ser el método de Thread")
+        self.assertIsInstance(worker._stop_event, threading.Event)
+
+    def test_add_en_caliente_arranca_el_hilo(self):
+        """Un módulo registrado con el planificador ya en marcha debe correr."""
+        from vision.vision_scheduler import VisionScheduler
+        sch = VisionScheduler()
+        sch.add("a", 30.0, lambda: None)
+        sch.start()
+        time.sleep(0.2)
+        sch.add("b", 30.0, lambda: None)       # añadido DESPUÉS de start()
+        time.sleep(0.3)
+        metricas = sch.metrics_dict()
+        sch.stop()
+        self.assertGreater(metricas["b"]["runs"], 0,
+                           "el módulo añadido en caliente quedó inerte")
+
+
+class TestControlPorCabeza(unittest.TestCase):
+    """El motor nuevo debe alimentar el cursor igual que el observador clásico."""
+
+    def _motor(self, tmp):
+        from vision.camera_manager import CameraManager
+        from vision.models.model_registry import ModelRegistry
+        from vision.perception_engine import PerceptionEngine
+        from vision.privacy_manager import from_settings
+        with open(os.path.join(tmp, "face_landmarker.task"), "wb") as fh:
+            fh.write(b"x" * 2_000_000)
+        cfg = load_settings()
+        mgr = CameraManager(FrameHub(), index=97, owner="prueba-cabeza",
+                            capture_factory=fake_factory(), auto_search=False)
+        return PerceptionEngine(cfg, privacy=from_settings(cfg), camera=mgr,
+                                registry=ModelRegistry(base_dir=tmp))
+
+    def test_entrega_landmarks_al_cursor(self):
+        import tempfile
+
+        class CaraFalsa:
+            landmarks = [(0.5, 0.5, 0.0)] * 478
+
+        class DetectorFalso:
+            def detect(self, _rgb):
+                return [CaraFalsa()]
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            motor = self._motor(tmp)
+            recibidos = []
+            try:
+                motor.start()
+                motor.set_landmark_consumer(lambda lm, shape: recibidos.append((len(lm), shape)))
+                motor.set_fast_mode(True)
+                motor._head_landmarker = DetectorFalso()
+                # Sondeo con límite: la máquina puede ir cargada y un sleep fijo
+                # haría la prueba frágil sin que hubiera nada roto.
+                limite = time.time() + 5.0
+                while not recibidos and time.time() < limite:
+                    time.sleep(0.02)
+                self.assertGreater(len(recibidos), 0,
+                                   "el cursor no recibió ningún landmark")
+                # La malla facial completa: es lo que HeadCursorController exige.
+                self.assertGreaterEqual(recibidos[-1][0], 468)
+                # Y al apagar el modo rápido, deja de entregar.
+                motor.set_fast_mode(False)
+                time.sleep(0.25)          # deja terminar la pasada en curso
+                cuantos = len(recibidos)
+                time.sleep(0.4)
+                self.assertEqual(len(recibidos), cuantos,
+                                 "siguió entregando con el modo rápido apagado")
+            finally:
+                motor.stop()
+                release_camera(97, "prueba-cabeza")
+
+    def test_el_adaptador_reenvia_al_motor(self):
+        from vision.legacy_adapter import LegacyCameraObserverAdapter
+
+        class MotorEspia:
+            def __init__(self):
+                self.consumidor = None
+                self.rapido = False
+
+            def set_landmark_consumer(self, c):
+                self.consumidor = c
+
+            def set_fast_mode(self, on):
+                self.rapido = bool(on)
+
+        espia = MotorEspia()
+        adaptador = LegacyCameraObserverAdapter(espia)
+
+        def consumidor(_lm, _shape):
+            pass
+
+        adaptador.set_landmark_consumer(consumidor)
+        adaptador.set_fast_mode(True)
+        self.assertIs(espia.consumidor, consumidor,
+                      "el adaptador no pasó el consumidor al motor")
+        self.assertTrue(espia.rapido)
+
+
+class TestVersion(unittest.TestCase):
+    """El sello existe para detectar que se ejecuta una copia antigua."""
+
+    def test_la_copia_actual_esta_al_dia(self):
+        from vision import version
+        faltan, sin_arreglo = version.comprobar()
+        self.assertEqual(faltan, [], f"faltan archivos: {faltan}")
+        self.assertEqual(sin_arreglo, [], f"faltan arreglos: {sin_arreglo}")
+        self.assertTrue(version.al_dia())
+
+    def test_informe_dice_version_y_ruta(self):
+        from vision import version
+        texto = version.informe()
+        self.assertIn(version.VERSION, texto)
+        self.assertIn("Ejecutando desde", texto)
+
+    def test_detecta_arreglo_ausente(self):
+        """Si un arreglo no está en el código, hay que enterarse."""
+        from vision import version
+        # Marca que ningún archivo contiene: debe salir como ausente.
+        original = version.MARCAS
+        try:
+            version.MARCAS = (("vision/vision_scheduler.py",
+                               "MARCA_QUE_NO_EXISTE_EN_NINGUN_SITIO",
+                               "arreglo de prueba"),)
+            _faltan, sin_arreglo = version.comprobar()
+            self.assertIn("arreglo de prueba", sin_arreglo)
+            self.assertFalse(version.al_dia())
+        finally:
+            version.MARCAS = original
+        self.assertTrue(version.al_dia(), "no restauró el estado")
+
+
+class TestInterruptorCamara(unittest.TestCase):
+    """Regresión: CAMERA_ENABLED=false apagaba TAMBIÉN el motor nuevo.
+
+    Es la contradicción que aparecía al seguir el procedimiento de migración:
+    para que el observador clásico no peleara por la webcam había que apagarlo,
+    y eso dejaba a YUE sin visión de ninguna clase.
+    """
+
+    def setUp(self):
+        self._guardadas = {}
+        for clave in ("CAMERA_ENABLED", "VISION_REPLACE_LEGACY",
+                      "VISION_CAMERA_ENABLED", "VISION_MP_ENABLED"):
+            self._guardadas[clave] = os.environ.pop(clave, None)
+
+    def tearDown(self):
+        for clave, valor in self._guardadas.items():
+            os.environ.pop(clave, None)
+            if valor is not None:
+                os.environ[clave] = valor
+
+    def _cargar(self, **entorno):
+        for clave, valor in entorno.items():
+            os.environ[clave] = valor
+        # `settings` lee primero `config`, que ya está importado con los valores
+        # del arranque; para la prueba forzamos la lectura del entorno.
+        import vision.settings as sm
+        original = sm._yue_config
+        try:
+            sm._yue_config = None
+            return sm.load()
+        finally:
+            sm._yue_config = original
+
+    def test_migracion_enciende_la_camara_del_motor(self):
+        cfg = self._cargar(CAMERA_ENABLED="false", VISION_REPLACE_LEGACY="true",
+                           VISION_MP_ENABLED="true")
+        self.assertTrue(cfg.camera_enabled,
+                        "al migrar, el motor nuevo debe quedarse con la cámara")
+        self.assertFalse(cfg.legacy_camera_enabled,
+                         "el observador clásico debe quedar apagado")
+
+    def test_sin_migracion_se_hereda_el_comportamiento_previo(self):
+        """Quien apagó la cámara y no migra, la sigue teniendo apagada."""
+        cfg = self._cargar(CAMERA_ENABLED="false", VISION_REPLACE_LEGACY="false",
+                           VISION_MP_ENABLED="true")
+        self.assertFalse(cfg.camera_enabled)
+
+    def test_apagado_explicito_manda_sobre_todo(self):
+        cfg = self._cargar(CAMERA_ENABLED="true", VISION_REPLACE_LEGACY="true",
+                           VISION_CAMERA_ENABLED="false", VISION_MP_ENABLED="true")
+        self.assertFalse(cfg.camera_enabled,
+                         "VISION_CAMERA_ENABLED=false debe imponerse")
+
+    def test_capacidades_explican_que_variable_tocar(self):
+        cfg = self._cargar(CAMERA_ENABLED="false", VISION_REPLACE_LEGACY="false",
+                           VISION_MP_ENABLED="true")
+        caps = detect_capabilities(settings=cfg)
+        self.assertFalse(caps["camera"])
+        motivo = caps.reasons["camera"]
+        self.assertIn("CAMERA_ENABLED", motivo)
+        self.assertIn("VISION_REPLACE_LEGACY", motivo,
+                      "el motivo debe decir cómo arreglarlo")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

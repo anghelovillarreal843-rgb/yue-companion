@@ -133,6 +133,18 @@ class PerceptionEngine:
         self._capabilities = None
         self._last_actions: list[ActionEvent] = []
 
+        # --- accesibilidad: control del cursor por cabeza -----------------
+        # El observador clásico entregaba los landmarks crudos por fotograma a
+        # `HeadCursorController`. Para poder apagarlo (y no pelear por la webcam)
+        # el motor nuevo tiene que ofrecer lo mismo. Con `set_fast_mode(True)` se
+        # registra un trabajo aparte, a más FPS, que SOLO saca landmarks y se los
+        # pasa al consumidor. No toca la cadencia lenta de emociones ni acciones.
+        self._landmark_consumer = None
+        self._fast_mode = False
+        self._head_landmarker = None
+        self._head_job_added = False
+        self._frame_shape: tuple[int, int] = (0, 0)
+
     # ==================================================================
     # Ciclo de vida
     # ==================================================================
@@ -148,6 +160,10 @@ class PerceptionEngine:
         self.privacy.set_camera(True)
         self._build_detectors()
         self._register_jobs()
+        # Si el control por cabeza ya estaba pedido antes de arrancar, se añade
+        # su trabajo ANTES de lanzar el planificador (los hilos se crean ahí).
+        if self._fast_mode and self._landmark_consumer is not None:
+            self._ensure_head_job()
         self.scheduler.start()
         log.info("Motor de percepción iniciado. Capacidades: %s",
                  self.capabilities().as_dict())
@@ -162,7 +178,8 @@ class PerceptionEngine:
             self.camera.stop()
         self.privacy.set_camera(False)
         for det in (self._face, self._landmarker, self._pose, self._hand_landmarker,
-                    self._gesture_model, self._object_model, self._classifier):
+                    self._gesture_model, self._object_model, self._classifier,
+                    self._head_landmarker):
             if det is not None:
                 try:
                     det.close()
@@ -434,6 +451,70 @@ class PerceptionEngine:
                                     source="text_detector", min_duration=1.0, cooldown=30.0)
             return
         self.read_text(auto=True)
+
+    # ==================================================================
+    # Accesibilidad: landmarks crudos para el control por cabeza
+    # ==================================================================
+    def set_landmark_consumer(self, consumer) -> None:
+        """Registra `consumer(landmarks, (ancho, alto))`, como el clásico.
+
+        Los landmarks son la malla facial completa (478 puntos) en coordenadas
+        normalizadas 0..1, que es exactamente lo que `HeadCursorController`
+        espera. Pasar None lo desconecta.
+        """
+        self._landmark_consumer = consumer
+
+    def set_fast_mode(self, on: bool) -> None:
+        """Activa la cadencia rápida de landmarks (solo mientras se usa el cursor)."""
+        self._fast_mode = bool(on)
+        if self._fast_mode:
+            self._ensure_head_job()
+
+    def _ensure_head_job(self) -> None:
+        """Registra, una sola vez, el trabajo rápido de landmarks."""
+        if self._head_job_added or not self._started:
+            return
+        path = self.registry.require("face_landmarker")
+        if path is None:
+            log.info("Sin face_landmarker no puedo alimentar el control por cabeza.")
+            return
+        from vision.detectors.face_landmarker import FaceLandmarkerModule
+        # Instancia PROPIA con keep_landmarks=True: el detector de expresiones
+        # no los guarda (pesan) y no queremos cambiarle el comportamiento.
+        self._head_landmarker = FaceLandmarkerModule(path, max_faces=1,
+                                                     keep_landmarks=True)
+        fps = float(getattr(self.cfg, "head_control_fps", 18.0))
+        self.scheduler.add("head_landmarks", fps, self._job_head_landmarks)
+        self._head_job_added = True
+        log.info("Control por cabeza: landmarks a %.0f FPS.", fps)
+
+    def _job_head_landmarks(self) -> None:
+        if not self._fast_mode or self._landmark_consumer is None:
+            return
+        if not self.privacy.allows("faces"):
+            return
+        detector = self._head_landmarker
+        if detector is None:
+            return
+        rgb = self.camera.latest_rgb()
+        if rgb is None:
+            return
+        try:
+            shape = (int(rgb.shape[1]), int(rgb.shape[0]))
+            self._frame_shape = shape
+        except Exception:
+            shape = self._frame_shape
+        faces = detector.detect(rgb) or []
+        if not faces:
+            return
+        landmarks = getattr(faces[0], "landmarks", None)
+        if not landmarks:
+            return
+        try:
+            self._landmark_consumer(landmarks, shape)
+        except Exception:
+            # Nunca dejamos que un fallo del cursor tumbe el hilo de visión.
+            pass
 
     # ==================================================================
     # Acciones bajo petición

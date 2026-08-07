@@ -9,6 +9,30 @@ está **apagado por defecto** (`VISION_MP_ENABLED=false`).
 
 ---
 
+## 0. Actualizar sin romper nada
+
+**Descomprimir el zip encima de la carpeta que ya existe es la forma más fácil
+de acabar ejecutando código viejo**: Windows crea
+`yue_companion\yue_companion\…` y se lanza la copia de fuera. Los arreglos
+parecen no funcionar aunque estén en el disco.
+
+Usa el actualizador, que respeta tu `.env`, tu `data/` y tus modelos:
+
+```bash
+python tools/actualizar.py C:\ruta\al\yue_companion_vision_avanzada.zip
+```
+
+Para comprobar en cualquier momento qué versión estás ejecutando:
+
+```bash
+python vision/version.py
+```
+
+o dentro de YUE: `/vision version`. Si dice **«esta copia NO está al día»**,
+te lista qué falta antes de que pierdas tiempo depurando algo ya corregido.
+
+---
+
 ## 1. Encender el sistema
 
 En tu `.env`:
@@ -299,7 +323,7 @@ Funcionan igual **habladas** y **escritas** en el chat:
 
 ```
 /camara on | off
-/vision estado | capacidades | modelos | metricas
+/vision estado | capacidades | modelos | metricas | version
 /vision leer | titulo | habitacion | accion | dedos | sostengo | animo
 /vision privacidad | privado | publico | olvida
 ```
@@ -378,28 +402,42 @@ Perfiles: `VISION_PERFORMANCE_MODE=low | balanced | high`.
 
 ## 11. Migración desde CameraObserver
 
-El sistema clásico **sigue intacto**. Para probar el nuevo sin borrar nada:
+El sistema clásico **sigue intacto**. Para usar **una sola webcam** para todo:
 
 ```ini
 VISION_MP_ENABLED=true
 VISION_REPLACE_LEGACY=true
+CAMERA_ENABLED=false        # el observador clásico ya no abre la cámara
 ```
+
+> **`CAMERA_ENABLED=false` NO apaga el motor nuevo cuando hay migración.**
+> Esa variable gobierna el observador clásico. Con `VISION_REPLACE_LEGACY=true`
+> el motor nuevo es el sistema de cámara y se enciende igual. Si alguna vez
+> quieres apagarlo a él, usa `VISION_CAMERA_ENABLED=false`.
+>
+> Sin migración, `CAMERA_ENABLED=false` sigue apagándolo todo, como siempre.
 
 `self.camera` pasa a ser `LegacyCameraObserverAdapter`, que expone exactamente
 la misma interfaz (`.active`, `.start()`, `.stop()`, `.latest()`, `.describe()`,
 `.context_for_ai()`, `.risk_signal()`, `.set_fast_mode()`) pero por dentro habla
 con el motor nuevo.
 
-> **Ojo:** el **control por cabeza** (`HeadCursorController`) necesita los
-> landmarks crudos por fotograma, que el motor nuevo no entrega. Si lo usas,
-> deja `VISION_REPLACE_LEGACY=false` y mantén el observador clásico.
+### El control por cabeza sigue funcionando
 
-Plan de retirada, cuando el nuevo esté validado:
+`HeadCursorController` necesita la malla facial completa por fotograma. El motor
+nuevo la entrega: al activar el modo rápido registra un trabajo aparte,
+`head_landmarks`, con su propia instancia de `face_landmarker` y
+`keep_landmarks=True`, a 18 FPS (`VISION_HEAD_CONTROL_FPS`).
 
-1. `VISION_REPLACE_LEGACY=true` durante unos días de uso real.
-2. Marcar `core/camera_observer.py` como obsoleto.
-3. Migrar el control por cabeza al motor nuevo.
-4. Borrar el módulo antiguo solo cuando nadie lo importe.
+Solo corre mientras el control por cabeza está activo; el resto del tiempo no
+consume nada. Requiere `face_landmarker.task` instalado.
+
+### Plan de retirada
+
+1. `VISION_REPLACE_LEGACY=true` y `CAMERA_ENABLED=false` durante unos días.
+2. Comprobar cursor, contexto del chat y `risk_signal()`.
+3. Marcar `core/camera_observer.py` como obsoleto.
+4. Borrarlo solo cuando nadie lo importe.
 
 ---
 
@@ -490,3 +528,19 @@ el índice que quieres usar.
   si la cámara muere sin dar apenas fotogramas, se prueba otro backend.
 - **`scan()` daba falsos positivos**: bastaba un `read()` correcto para dar un
   índice por bueno. Ahora exige la misma validación de flujo sostenido.
+- **`TypeError: 'Event' object is not callable` al cerrar.** `_Worker` guardaba
+  el evento de parada en `self._stop`, tapando el método privado
+  `threading.Thread._stop()` que la biblioteca estándar invoca desde `join()` y
+  `is_alive()`. Fallo intermitente que podía reventar el apagado de YUE.
+  Renombrado a `_stop_event`, y `stop()` ahora aísla el fallo de cada hilo.
+- **Los módulos añadidos en caliente no arrancaban.** `VisionScheduler.add()`
+  después de `start()` guardaba el hilo pero no lo lanzaba: aparecía en las
+  métricas con 0 pasadas y nadie se enteraba. Afectaba justo al trabajo de
+  landmarks del control por cabeza, que solo se registra al activarlo.
+- **`CAMERA_ENABLED` apagaba los dos sistemas a la vez.** El procedimiento de
+  migración pedía ponerlo en `false` para que el observador clásico no peleara
+  por la webcam, pero esa misma variable gobernaba el motor nuevo: seguir el
+  procedimiento dejaba a YUE sin visión y con todas las capacidades en `False`.
+  Ahora el motor tiene `VISION_CAMERA_ENABLED`, y con la migración activa se
+  enciende solo. El diagnóstico incluye una sección **2b. Coherencia** que
+  detecta esta y otras combinaciones contradictorias del `.env`.

@@ -102,3 +102,47 @@
 {"ts": 1786059487.073184, "event": "plan_invalid", "run_id": "run_950aad09705c", "cycle": 1, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
 {"ts": 1786059487.0737915, "event": "plan_invalid", "run_id": "run_950aad09705c", "cycle": 2, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
 {"ts": 1786059487.0743704, "event": "plan_invalid", "run_id": "run_950aad09705c", "cycle": 3, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786061929.7252, "event": "plan_created", "run_id": "run_b620fdfe5686", "plan_id": "plan_f7fcb2d573ba", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 1, "cycle": 1}
+{"ts": 1786061929.725988, "event": "task_result", "run_id": "run_b620fdfe5686", "plan_id": "plan_f7fcb2d573ba", "task_id": "step_1", "action": "open_app", "params": {"name": "notepad"}, "ok": true, "duration": 0.0003, "error": "", "detail": "abrir notepad · verificación UI no disponible en este sistema", "attempts": 1, "retries": 0, "skipped": false, "recovered": false}
+{"ts": 1786061929.726585, "event": "plan_created", "run_id": "run_b620fdfe5686", "plan_id": "plan_6aa301a54927", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 0, "cycle": 2}
+{"ts": 1786061931.033636, "event": "plan_unreadable", "run_id": "run_b2c5a556e550", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786061931.034739, "event": "plan_created", "run_id": "run_b2c5a556e550", "plan_id": "plan_f8c39091b06c", "source": "ai", "objective": "haz algo raro que no matchea el regex y luego mas", "tasks": 0, "cycle": 2}
+{"ts": 1786061931.0370212, "event": "plan_unreadable", "run_id": "run_ff9e454307e8", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786061931.037707, "event": "plan_unreadable", "run_id": "run_ff9e454307e8", "cycle": 2, "error": "Expecting ':' delimiter"}
+{"ts": 1786061931.0383804, "event": "plan_unreadable", "run_id": "run_ff9e454307e8", "cycle": 3, "error": "Expecting ':' delimiter"}
+{"ts": 1786061931.040623, "event": "plan_invalid", "run_id": "run_0778de33e153", "cycle": 1, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786061931.041268, "event": "plan_invalid", "run_id": "run_0778de33e153", "cycle": 2, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786061931.0419729, "event": "plan_invalid", "run_id": "run_0778de33e153", "cycle": 3, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786062029.883305, "event": "plan_created", "run_id": "run_60ac06878de1", "plan_id": "plan_f2d2b319f2f6", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 1, "cycle": 1}
+{"ts": 1786062029.8838522, "event": "task_result", "run_id": "run_60ac06878de1", "plan_id": "plan_f2d2b319f2f6", "task_id": "step_1", "action": "open_app", "params": {"name": "notepad"}, "ok": true, "duration": 0.0003, "error": "", "detail": "abrir notepad · verificación UI no disponible en este sistema", "attempts": 1, "retries": 0, "skipped": false, "recovered": false}
+{"ts": 1786062029.8844488, "event": "plan_created", "run_id": "run_60ac06878de1", "plan_id": "plan_0c3f8f12b182", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 0, "cycle": 2}
+{"ts": 1786062031.0527146, "event": "plan_unreadable", "run_id": "run_cf425b433f4b", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786062031.0536048, "event": "plan_created", "run_id": "run_cf425b433f4b", "plan_id": "plan_d1173f4223c4", "source": "ai", "objective": "haz algo raro que no matchea el regex y luego mas", "tasks": 0, "cycle": 2}
+{"ts": 1786062031.0559735, "event": "plan_unreadable", "run_id": "run_126915b0cc9c", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786062031.0566626, "event": "plan_unreadable", "run_id": "run_126915b0cc9c", "cycle": 2, "error": "Expecting ':' delimiter"}
+{"ts": 1786062031.0572872, "event": "plan_unreadable", "run_id": "run_126915b0cc9c", "cycle": 3, "error": "Expecting ':' delimiter"}
+{"ts": 1786062031.0596037, "event": "plan_invalid", "run_id": "run_20c5d2692917", "cycle": 1, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786062031.0602808, "event": "plan_invalid", "run_id": "run_20c5d2692917", "cycle": 2, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786062031.0608795, "event": "plan_invalid", "run_id": "run_20c5d2692917", "cycle": 3, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786062837.8461225, "event": "plan_created", "run_id": "run_83ba4d7aa381", "plan_id": "plan_ecb4d3509c06", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 1, "cycle": 1}
+{"ts": 1786062837.8468406, "event": "task_result", "run_id": "run_83ba4d7aa381", "plan_id": "plan_ecb4d3509c06", "task_id": "step_1", "action": "open_app", "params": {"name": "notepad"}, "ok": true, "duration": 0.0003, "error": "", "detail": "abrir notepad · verificación UI no disponible en este sistema", "attempts": 1, "retries": 0, "skipped": false, "recovered": false}
+{"ts": 1786062837.8475468, "event": "plan_created", "run_id": "run_83ba4d7aa381", "plan_id": "plan_b35088cec701", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 0, "cycle": 2}
+{"ts": 1786062839.3766954, "event": "plan_unreadable", "run_id": "run_c02e2000d2e6", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786062839.3779395, "event": "plan_created", "run_id": "run_c02e2000d2e6", "plan_id": "plan_b0efbf423e42", "source": "ai", "objective": "haz algo raro que no matchea el regex y luego mas", "tasks": 0, "cycle": 2}
+{"ts": 1786062839.3807733, "event": "plan_unreadable", "run_id": "run_07f6e26da49c", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786062839.381648, "event": "plan_unreadable", "run_id": "run_07f6e26da49c", "cycle": 2, "error": "Expecting ':' delimiter"}
+{"ts": 1786062839.3826156, "event": "plan_unreadable", "run_id": "run_07f6e26da49c", "cycle": 3, "error": "Expecting ':' delimiter"}
+{"ts": 1786062839.3854234, "event": "plan_invalid", "run_id": "run_251e3da52c4b", "cycle": 1, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786062839.3863122, "event": "plan_invalid", "run_id": "run_251e3da52c4b", "cycle": 2, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786062839.387143, "event": "plan_invalid", "run_id": "run_251e3da52c4b", "cycle": 3, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786064730.0825498, "event": "plan_created", "run_id": "run_6079512f30b3", "plan_id": "plan_5f8f2bcaf53b", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 1, "cycle": 1}
+{"ts": 1786064730.083479, "event": "task_result", "run_id": "run_6079512f30b3", "plan_id": "plan_5f8f2bcaf53b", "task_id": "step_1", "action": "open_app", "params": {"name": "notepad"}, "ok": true, "duration": 0.0003, "error": "", "detail": "abrir notepad · verificación UI no disponible en este sistema", "attempts": 1, "retries": 0, "skipped": false, "recovered": false}
+{"ts": 1786064730.0840385, "event": "plan_created", "run_id": "run_6079512f30b3", "plan_id": "plan_ed53e01d1ed0", "source": "ai", "objective": "realiza una tarea compleja", "tasks": 0, "cycle": 2}
+{"ts": 1786064731.438134, "event": "plan_unreadable", "run_id": "run_878fde00a154", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786064731.43942, "event": "plan_created", "run_id": "run_878fde00a154", "plan_id": "plan_b5f52dc3f939", "source": "ai", "objective": "haz algo raro que no matchea el regex y luego mas", "tasks": 0, "cycle": 2}
+{"ts": 1786064731.4425285, "event": "plan_unreadable", "run_id": "run_a3c8ee21947e", "cycle": 1, "error": "Expecting ':' delimiter"}
+{"ts": 1786064731.4433053, "event": "plan_unreadable", "run_id": "run_a3c8ee21947e", "cycle": 2, "error": "Expecting ':' delimiter"}
+{"ts": 1786064731.4439218, "event": "plan_unreadable", "run_id": "run_a3c8ee21947e", "cycle": 3, "error": "Expecting ':' delimiter"}
+{"ts": 1786064731.446309, "event": "plan_invalid", "run_id": "run_3d45a4c887f3", "cycle": 1, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786064731.4470606, "event": "plan_invalid", "run_id": "run_3d45a4c887f3", "cycle": 2, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}
+{"ts": 1786064731.4477232, "event": "plan_invalid", "run_id": "run_3d45a4c887f3", "cycle": 3, "error": "La IA no produjo ni un paso válido (paso 1: Acción no permitida: vacía · recibí {\"action\": \"\"})."}

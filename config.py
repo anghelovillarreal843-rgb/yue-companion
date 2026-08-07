@@ -722,6 +722,15 @@ VISION_DEBUG_OVERLAY = _truthy(os.getenv("VISION_DEBUG_OVERLAY", "false"))
 # paquete vision/ se comporta exactamente como antes de esta integración.
 VISION_PERCEPTION_ENABLED = _truthy(os.getenv("VISION_PERCEPTION_ENABLED", "true"))
 
+# Interruptor de cámara PROPIO del motor nuevo, separado del clásico.
+# CAMERA_ENABLED gobierna el CameraObserver de siempre. Al migrar hay que
+# apagarlo para que no pelee por la webcam, y antes eso dejaba también sin
+# cámara al motor nuevo. Ahora:
+#   - vacío + VISION_REPLACE_LEGACY=true  -> el motor nuevo enciende la cámara,
+#   - vacío + sin migración               -> hereda CAMERA_ENABLED (como antes),
+#   - true/false explícito                -> manda siempre.
+VISION_CAMERA_ENABLED = os.getenv("VISION_CAMERA_ENABLED", "").strip()
+
 # Seguimiento fino de manos y dedos (21 puntos por mano).
 VISION_HANDS_ENABLED = _truthy(os.getenv("VISION_HANDS_ENABLED", "true"))
 VISION_HAND_FPS = float(os.getenv("VISION_HAND_FPS", "0") or "0")
@@ -786,3 +795,7 @@ VISION_ALLOW_DOWNLOAD = _truthy(os.getenv("VISION_ALLOW_DOWNLOAD", "false"))
 # Con true, self.camera pasa a ser el adaptador que habla con el motor nuevo.
 # Se deja en false hasta validar el sistema nuevo en tu equipo.
 VISION_REPLACE_LEGACY = _truthy(os.getenv("VISION_REPLACE_LEGACY", "false"))
+# FPS de los landmarks que alimentan el control del cursor por cabeza. Van a más
+# cadencia que el resto porque el cursor se nota enseguida si va lento. Solo se
+# ejecutan mientras el control por cabeza está activo.
+VISION_HEAD_CONTROL_FPS = float(os.getenv("VISION_HEAD_CONTROL_FPS", "0") or "0")

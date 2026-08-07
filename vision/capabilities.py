@@ -141,7 +141,11 @@ def detect(
     if not cfg("enabled", False):
         deny("camera", "el sistema de visión está apagado (VISION_MP_ENABLED=false)")
     elif not cfg("camera_enabled", True):
-        deny("camera", "la cámara está desactivada en la configuración")
+        if settings is not None and getattr(settings, "replace_legacy", False):
+            deny("camera", "la cámara del motor está apagada (VISION_CAMERA_ENABLED=false)")
+        else:
+            deny("camera", "la cámara está desactivada (CAMERA_ENABLED=false). "
+                           "Si estás migrando, usa VISION_REPLACE_LEGACY=true")
     elif not has_cv2:
         deny("camera", "falta opencv-python (pip install opencv-python)")
     elif camera_available is False:

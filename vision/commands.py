@@ -84,6 +84,13 @@ def handle(system, command: str, arg: str = "") -> str | None:
                     f"certeza {est.get('certainty', 'baja')})")
         if arg in {"capacidades", "capabilities"}:
             return system.capabilities_report()
+        if arg in {"version", "versión", "integridad"}:
+            try:
+                from vision import version as version_mod
+                return version_mod.informe()
+            except Exception as exc:
+                return ("No encuentro vision/version.py: estás ejecutando una "
+                        f"copia antigua del proyecto. ({exc})")
         if arg in {"modelos", "models"}:
             return system.models_report()
         if arg in {"olvida", "olvidar", "forget"}:

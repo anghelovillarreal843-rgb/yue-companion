@@ -109,16 +109,25 @@ class LegacyCameraObserverAdapter:
     def set_landmark_consumer(self, consumer) -> None:
         """Compatibilidad con `HeadCursorController`.
 
-        El motor nuevo no entrega landmarks crudos por fotograma; se guarda el
-        consumidor para no romper la llamada y se avisa una sola vez.
+        El motor de percepción SÍ sabe entregar landmarks crudos por fotograma:
+        registra un trabajo aparte, a más FPS, con `keep_landmarks=True`. Así el
+        control del cursor por cabeza sigue funcionando aunque el observador
+        clásico esté apagado, que es lo que permite usar UNA sola webcam.
         """
         self._landmark_consumer = consumer
-        if consumer is not None:
-            log.info("El control por cabeza usa el observador clásico; con el motor "
-                     "nuevo mantén CameraObserver activo para esa función.")
+        if self.engine is not None:
+            try:
+                self.engine.set_landmark_consumer(consumer)
+            except Exception as exc:
+                log.warning("No pude conectar el control por cabeza: %s", exc)
 
     def set_fast_mode(self, on: bool) -> None:
         self._fast_mode = bool(on)
+        if self.engine is not None:
+            try:
+                self.engine.set_fast_mode(bool(on))
+            except Exception:
+                pass
 
     # -- estado -----------------------------------------------------------
     def latest(self) -> LegacyObservation | None:
