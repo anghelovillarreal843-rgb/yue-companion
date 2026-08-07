@@ -708,3 +708,81 @@ VISION_OBJECT_MIN_CONFIDENCE = float(os.getenv("VISION_OBJECT_MIN_CONFIDENCE", "
 VISION_SAVE_FRAMES = _truthy(os.getenv("VISION_SAVE_FRAMES", "false"))
 VISION_EXTERNAL_UPLOAD = _truthy(os.getenv("VISION_EXTERNAL_UPLOAD", "false"))
 VISION_DEBUG_OVERLAY = _truthy(os.getenv("VISION_DEBUG_OVERLAY", "false"))
+
+# ===========================================================================
+# VISIÓN AVANZADA — OCR, escena, acciones, emociones y privacidad  [ADITIVO]
+# ---------------------------------------------------------------------------
+# Bloque agregado por la integración del motor de percepción. Todo vive DENTRO
+# de VISION_MP_ENABLED: si ese interruptor está en false, nada de esto se
+# ejecuta ni consume recursos. El paquete vision/ tiene sus propios valores por
+# defecto, así que este bloque es para descubribilidad y para sobrescribir.
+# ===========================================================================
+
+# Motor de percepción (OCR, habitación, acciones, emociones). Con false, el
+# paquete vision/ se comporta exactamente como antes de esta integración.
+VISION_PERCEPTION_ENABLED = _truthy(os.getenv("VISION_PERCEPTION_ENABLED", "true"))
+
+# Seguimiento fino de manos y dedos (21 puntos por mano).
+VISION_HANDS_ENABLED = _truthy(os.getenv("VISION_HANDS_ENABLED", "true"))
+VISION_HAND_FPS = float(os.getenv("VISION_HAND_FPS", "0") or "0")
+
+# Límite de personas seguidas a la vez y dispositivo de inferencia.
+VISION_MAX_PEOPLE = int(os.getenv("VISION_MAX_PEOPLE", "4"))
+VISION_DEVICE = os.getenv("VISION_DEVICE", "auto").strip().lower()
+VISION_DEBUG = _truthy(os.getenv("VISION_DEBUG", "false"))
+VISION_AUTO_SEARCH_CAMERA = _truthy(os.getenv("VISION_AUTO_SEARCH_CAMERA", "true"))
+# Backend de captura: vacío = automático (prueba MSMF, DSHOW y ANY y se queda
+# con el que entregue flujo sostenido). Fuerza uno con msmf | dshow | v4l2 | any
+# si el diagnóstico te lo recomienda.
+VISION_CAMERA_BACKEND = os.getenv("VISION_CAMERA_BACKEND", "").strip().lower()
+VISION_MAX_CAMERA_INDEX = int(os.getenv("VISION_MAX_CAMERA_INDEX", "4"))
+
+# --- Lectura de textos por cámara (OCR) ---
+# Motor: auto | paddleocr | easyocr | tesseract | ninguno. Todos son LOCALES.
+VISION_OCR_ENABLED = _truthy(os.getenv("VISION_OCR_ENABLED", "true"))
+VISION_OCR_ENGINE = os.getenv("VISION_OCR_ENGINE", "auto").strip().lower()
+VISION_OCR_LANGUAGES = os.getenv("VISION_OCR_LANGUAGES", "es").strip()
+# Por defecto YUE NO lee sola: espera a que le pidas "lee esto". Ponlo en false
+# solo si quieres que lea automáticamente cualquier texto que aparezca.
+VISION_OCR_ONLY_ON_REQUEST = _truthy(os.getenv("VISION_OCR_ONLY_ON_REQUEST", "true"))
+# Fotogramas que deben coincidir antes de dar un texto por estable.
+VISION_OCR_MIN_AGREEMENTS = int(os.getenv("VISION_OCR_MIN_AGREEMENTS", "3"))
+VISION_OCR_MIN_CONFIDENCE = float(os.getenv("VISION_OCR_MIN_CONFIDENCE", "0.35"))
+VISION_TEXT_WATCH_FPS = float(os.getenv("VISION_TEXT_WATCH_FPS", "0.5"))
+
+# --- Descripción de la habitación ---
+VISION_SCENE_DESCRIPTION_ENABLED = _truthy(os.getenv("VISION_SCENE_DESCRIPTION_ENABLED", "true"))
+VISION_SCENE_FPS = float(os.getenv("VISION_SCENE_FPS", "0.3"))
+
+# --- Reconocimiento de acciones (análisis temporal) ---
+VISION_ACTIONS_ENABLED = _truthy(os.getenv("VISION_ACTIONS_ENABLED", "true"))
+VISION_ACTION_FPS = float(os.getenv("VISION_ACTION_FPS", "6"))
+
+# --- Estimación afectiva ---
+# IMPORTANTE: es una ESTIMACIÓN probabilística, nunca un hecho psicológico.
+# YUE jamás diagnostica ni afirma emociones como certezas.
+VISION_EMOTIONS_ENABLED = _truthy(os.getenv("VISION_EMOTIONS_ENABLED", "true"))
+VISION_EMOTION_MIN_CONFIDENCE = float(os.getenv("VISION_EMOTION_MIN_CONFIDENCE", "0.45"))
+# El ritmo de voz solo se usa como señal afectiva con permiso EXPLÍCITO.
+VISION_EMOTION_USE_VOICE = _truthy(os.getenv("VISION_EMOTION_USE_VOICE", "false"))
+
+# --- Antirrebote de eventos visuales ---
+VISION_EVENT_MIN_DURATION = float(os.getenv("VISION_EVENT_MIN_DURATION", "0.45"))
+VISION_EVENT_COOLDOWN = float(os.getenv("VISION_EVENT_COOLDOWN", "4"))
+
+# --- Privacidad (punto 13). Los valores por defecto son los más restrictivos ---
+VISION_PROCESS_LOCAL = _truthy(os.getenv("VISION_PROCESS_LOCAL", "true"))
+VISION_SAVE_EVENTS = _truthy(os.getenv("VISION_SAVE_EVENTS", "false"))
+VISION_ALLOW_CLOUD = _truthy(os.getenv("VISION_ALLOW_CLOUD", "false"))
+# Con true, YUE no analiza nada hasta que se lo pidas expresamente.
+VISION_ONLY_ON_REQUEST = _truthy(os.getenv("VISION_ONLY_ON_REQUEST", "false"))
+
+# --- Modelos ---
+# variant: full | lite. Los modelos NUNCA se descargan solos.
+VISION_MODEL_VARIANT = os.getenv("VISION_MODEL_VARIANT", "full").strip().lower()
+VISION_ALLOW_DOWNLOAD = _truthy(os.getenv("VISION_ALLOW_DOWNLOAD", "false"))
+
+# --- Migración desde el CameraObserver clásico (punto 16) ---
+# Con true, self.camera pasa a ser el adaptador que habla con el motor nuevo.
+# Se deja en false hasta validar el sistema nuevo en tu equipo.
+VISION_REPLACE_LEGACY = _truthy(os.getenv("VISION_REPLACE_LEGACY", "false"))

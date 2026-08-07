@@ -54,8 +54,45 @@ def handle(system, command: str, arg: str = "") -> str | None:
         if arg in {"escena", "scene"}:
             return system.classify_now()
         if arg in {"privacidad", "privacy"}:
-            return ("Privacidad: procesamiento 100% local, no guardo ni envío "
-                    "imágenes, y libero la cámara al cerrar.")
+            return _privacy_text(system)
+        # ---------------- ADITIVO: comandos de la visión avanzada --------
+        if arg in {"leer", "lee", "texto", "ocr"}:
+            resultado = system.read_text()
+            if resultado is None or not getattr(resultado, "text", ""):
+                return ("No consigo leer nada estable. Acerca el papel, sujétalo "
+                        "quieto y procura que tenga luz.")
+            return f'Leo: "{resultado.text}" (confianza {resultado.confidence:.0%})'
+        if arg in {"titulo", "título"}:
+            resultado = system.read_text(only_title=True)
+            if resultado is None or not getattr(resultado, "text", ""):
+                return "No distingo un título claro ahora mismo."
+            return f'El título dice: "{resultado.text}"'
+        if arg in {"habitacion", "habitación", "cuarto", "describir", "describe"}:
+            return system.describe_room()
+        if arg in {"accion", "acción", "acciones", "que-hago"}:
+            return system.what_am_i_doing()
+        if arg in {"dedos", "fingers"}:
+            return system.count_fingers()
+        if arg in {"sostengo", "holding", "mano"}:
+            return system.what_am_i_holding()
+        if arg in {"animo", "ánimo", "emocion", "emoción"}:
+            est = system.affective_estimate()
+            if est.get("affective_state", "undetermined") == "undetermined":
+                return "No tengo una estimación clara de tu estado de ánimo."
+            return (f"{est.get('safe_description', '')} "
+                    f"(confianza {est.get('confidence', 0):.0%}, "
+                    f"certeza {est.get('certainty', 'baja')})")
+        if arg in {"capacidades", "capabilities"}:
+            return system.capabilities_report()
+        if arg in {"modelos", "models"}:
+            return system.models_report()
+        if arg in {"olvida", "olvidar", "forget"}:
+            n = system.forget_observations()
+            return f"Olvidé lo observado ({n} anotaciones borradas)."
+        if arg.startswith("privado") or arg.startswith("privacidad on"):
+            return system.set_privacy_mode(True)
+        if arg.startswith("publico") or arg.startswith("público"):
+            return system.set_privacy_mode(False)
         if arg.startswith("debug"):
             estado = "activado" if "on" in arg else "desactivado" if "off" in arg else "consulta"
             return f"Overlay de depuración: {estado} (VISION_DEBUG_OVERLAY)."
@@ -68,3 +105,12 @@ def handle(system, command: str, arg: str = "") -> str | None:
         return _fmt_status(system)
 
     return None
+
+
+def _privacy_text(system) -> str:
+    """Informe de privacidad; usa el gestor nuevo si existe."""
+    try:
+        return system.privacy_report()
+    except Exception:
+        return ("Privacidad: procesamiento 100% local, no guardo ni envío "
+                "imágenes, y libero la cámara al cerrar.")

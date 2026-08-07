@@ -558,6 +558,27 @@ class Controller(QObject):
             print("[vision-mp] no se pudo enganchar el sistema de visión:", exc)
             self.vision_mp = None
 
+        # ADITIVO (migración, punto 16 del pedido): con VISION_REPLACE_LEGACY=true
+        # el `CameraObserver` clásico se sustituye por un ADAPTADOR que expone la
+        # misma interfaz (.active/.start/.stop/.latest/.describe/.context_for_ai/
+        # .risk_signal/.set_fast_mode) pero por dentro habla con el motor de
+        # percepción nuevo. Así se prueba la migración SIN borrar el código viejo.
+        # Por defecto está en false: nada cambia.
+        try:
+            if (self.vision_mp is not None
+                    and bool(getattr(config, "VISION_REPLACE_LEGACY", False))):
+                from vision.legacy_adapter import LegacyCameraObserverAdapter
+                self.camera.stop()          # libera la webcam del observador clásico
+                self.camera = LegacyCameraObserverAdapter(
+                    getattr(self.vision_mp, "perception", None),
+                    status_callback=self._camera_bridge.status.emit,
+                    context_max_age=float(getattr(config, "CAMERA_CONTEXT_MAX_AGE", 8.0)),
+                )
+                self.camera.start()
+                print("[vision-mp] migración activa: CameraObserver -> adaptador de percepción.")
+        except Exception as exc:
+            print("[vision-mp] no pude activar el adaptador de migración:", exc)
+
     # ---------- interfaz ----------
     def toggle_chat(self):
         if self.chat.isVisible():
@@ -664,6 +685,22 @@ class Controller(QObject):
                     note = vision_awareness.camera_prompt_note(self.camera)
                     if note:
                         prompt += note
+                except Exception:
+                    pass
+            # ADITIVO (visión avanzada): contexto breve y filtrado del motor de
+            # percepción (texto leído, objetos, acción en curso, gesto nuevo,
+            # estimación de ánimo). Solo entra lo reciente, estable y no
+            # repetido; nunca listas largas ni coordenadas.
+            if getattr(self, "vision_mp", None) is not None:
+                try:
+                    contexto_avanzado = self.vision_mp.context_for_ai()
+                    if contexto_avanzado:
+                        prompt += (
+                            "\n\n" + contexto_avanzado
+                            + "\n(Las estimaciones de ánimo son impresiones aproximadas, "
+                              "nunca hechos. No diagnostiques ni afirmes emociones como "
+                              "certezas. Menciona lo visual solo si viene a cuento.)"
+                        )
                 except Exception:
                     pass
         # NUEVO (percepción de pantalla v3): afirmación —como la de cámara y
@@ -1006,6 +1043,21 @@ class Controller(QObject):
                     return
             except Exception as exc:
                 print("[vision] no pude resolver «¿puedes verme?»:", exc)
+
+        # ADITIVO (visión avanzada): órdenes habladas o escritas sobre la cámara
+        # —"lee este texto", "describe mi habitación", "¿qué estoy haciendo?",
+        # "modo privacidad", "olvida lo que viste"…—. Funciona igual desde el
+        # micrófono y desde el chat porque solo trabaja con texto. Si el sistema
+        # está apagado o la frase no es una orden de visión, devuelve None y el
+        # flujo sigue exactamente como antes.
+        if getattr(self, "vision_mp", None) is not None:
+            try:
+                respuesta_vision = self.vision_mp.handle_voice(text)
+                if respuesta_vision:
+                    self._yue_say(respuesta_vision)
+                    return
+            except Exception as exc:
+                print("[vision] no pude procesar la orden de visión:", exc)
 
         # NUEVO: si hay un modo especial activo, la conversación va a su motor.
         # (Companion es el modo por defecto y sigue el flujo de abajo, intacto.)
@@ -1802,7 +1854,7 @@ class Controller(QObject):
         # orden de PC/visión en curso, o mientras YUE habla).
         try:
             if (getattr(self.audio, "media_playing", False) or self._pc_busy
-                    or self._vision_busy or self.speaker.is_speaking()):
+                    or self._vision_busy or self.speaker.is_speaking):
                 return
         except Exception:
             pass
@@ -2172,7 +2224,7 @@ class Controller(QObject):
         # orden de PC/visión en curso, o la voz apagada. El cuentagotas y la
         # regla de "solo tras pausa en los diálogos" ya vienen de decide_reaction.
         if (self.chat.is_user_composing() or self._pc_busy or self._vision_busy
-                or self.speaker.is_speaking()):
+                or self.speaker.is_speaking):
             return
         comentario = reaction.comment
         if self.speaker.enabled:
@@ -2227,7 +2279,7 @@ class Controller(QObject):
         except Exception:
             pass
         if (self.chat.is_user_composing() or self._pc_busy or self._vision_busy
-                or teacher_mode or self.speaker.is_speaking()):
+                or teacher_mode or self.speaker.is_speaking):
             return
         comment = reaction.comment
         if self.speaker.enabled:
@@ -2953,6 +3005,14 @@ class Controller(QObject):
         try:
             if getattr(self, "vision_v3", None) is not None:
                 self.vision_v3.stop()
+        except Exception:
+            pass
+        # CORRECCIÓN (punto 15): el sistema de visión MediaPipe/percepción NO se
+        # estaba deteniendo al cerrar. Sus hilos quedaban vivos y la webcam
+        # tomada hasta que moría el proceso. Ahora se apaga igual que los demás.
+        try:
+            if getattr(self, "vision_mp", None) is not None:
+                self.vision_mp.stop()
         except Exception:
             pass
 

@@ -26,6 +26,16 @@ from vision.vision_scheduler import VisionScheduler
 from vision.vision_state import VisionState
 from vision.vision_state_fusion import VisionStateFusion
 
+# --- ADITIVO (visión avanzada) ------------------------------------------
+# Estos módulos son nuevos y NO reemplazan nada de arriba: el sistema clásico
+# de MediaPipe Tasks sigue funcionando igual. El motor de percepción se monta
+# encima y se puede apagar con VISION_PERCEPTION_ENABLED=false.
+from vision.camera_manager import CameraManager
+from vision.context_builder import VisionContextBuilder
+from vision.event_manager import EventManager
+from vision.models.model_registry import ModelRegistry
+from vision.privacy_manager import from_settings as privacy_from_settings
+
 log = logging.getLogger("vision.controller")
 
 
@@ -64,6 +74,51 @@ class VisionSystem:
             capture_factory=camera_factory,
         )
 
+        # ------------------------------------------------------------------
+        # ADITIVO (visión avanzada): privacidad, cerrojo de cámara, eventos y
+        # motor de percepción. Todo comparte el MISMO FrameHub, así que nunca
+        # se abre una segunda webcam. Si algo falla aquí, el sistema clásico
+        # sigue funcionando exactamente igual que antes.
+        # ------------------------------------------------------------------
+        self.privacy = privacy_from_settings(self.cfg)
+        self.registry = ModelRegistry(
+            base_dir=model_dir,
+            variant=getattr(self.cfg, "model_variant", "full"),
+            allow_download=getattr(self.cfg, "allow_download", False),
+        )
+        self.events = EventManager(
+            min_duration=getattr(self.cfg, "event_min_duration", 0.45),
+            cooldown=getattr(self.cfg, "event_cooldown", 4.0),
+        )
+        self.context_builder = VisionContextBuilder()
+        self.camera_manager = CameraManager(
+            frame_hub=self.hub,
+            index=self.cfg.camera_index,
+            width=self.cfg.width,
+            height=self.cfg.height,
+            target_fps=self.cfg.target_fps,
+            privacy_mode=self.cfg.privacy_mode,
+            owner="vision.perception",
+            auto_search=getattr(self.cfg, "auto_search_camera", True),
+            max_index=getattr(self.cfg, "max_camera_index", 4),
+            status_callback=self._status,
+            capture_factory=camera_factory,
+        )
+        self.perception = None
+        if getattr(self.cfg, "perception_enabled", True):
+            try:
+                from vision.perception_engine import PerceptionEngine
+                self.perception = PerceptionEngine(
+                    self.cfg,
+                    privacy=self.privacy,
+                    camera=self.camera_manager,
+                    registry=self.registry,
+                    event_manager=self.events,
+                )
+            except Exception as exc:
+                log.warning("No pude montar el motor de percepción: %s", exc)
+                self.perception = None
+
         # Detectores (se construyen perezosamente al primer uso).
         self._face = self._pose = self._land = self._gesture = self._objects = None
         self._classifier = None
@@ -98,6 +153,20 @@ class VisionSystem:
         if self._started:
             return
         self._started = True
+
+        # ADITIVO: si el motor de percepción está activo, ÉL es el dueño de la
+        # cámara (a través del CameraManager, que además toma el cerrojo global).
+        # Nunca se arrancan los dos caminos: eso es justo lo que provocaba que
+        # dos módulos pelearan por la misma webcam.
+        if self.perception is not None:
+            ok = self.perception.start()
+            if ok:
+                log.info("Sistema de visión iniciado con motor de percepción (%s).",
+                         self.cfg.performance_mode)
+                return
+            log.warning("El motor de percepción no arrancó; uso el camino clásico.")
+            self.perception = None
+
         self._build_detectors()
         self._register_jobs()
         self.camera.start()
@@ -105,6 +174,11 @@ class VisionSystem:
         log.info("Sistema de visión MP iniciado (%s).", self.cfg.performance_mode)
 
     def stop(self) -> None:
+        if self.perception is not None:
+            try:
+                self.perception.stop()
+            except Exception as exc:
+                log.debug("fallo deteniendo la percepción: %s", exc)
         try:
             self.scheduler.stop()
         finally:
@@ -214,12 +288,108 @@ class VisionSystem:
     # ------------------------------------------------------------------
     # API para el resto de YUE
     def snapshot(self) -> dict:
+        if self.perception is not None:
+            return self.perception.snapshot()
         return self.fusion.snapshot()
 
     def context_for_ai(self) -> str:
+        if self.perception is not None:
+            ctx = self.context_builder.build(self.perception.snapshot(), events=self.events)
+            return ctx.text
         return build_visual_context(self.snapshot())
 
+    # --- ADITIVO: funciones de la visión avanzada ---------------------
+    def read_text(self, only_title: bool = False):
+        """Lee el texto mostrado a la cámara. None si no hay nada estable."""
+        if self.perception is None:
+            return None
+        self.privacy.request_analysis()
+        return self.perception.read_text(only_title=only_title)
+
+    def describe_room(self) -> str:
+        if self.perception is None:
+            return self.describe()
+        self.privacy.request_analysis()
+        return self.perception.describe_room()
+
+    def what_am_i_doing(self) -> str:
+        if self.perception is None:
+            return "El reconocimiento de acciones no está activo."
+        return self.perception.what_am_i_doing()
+
+    def count_fingers(self) -> str:
+        if self.perception is None:
+            return "El seguimiento de manos no está activo."
+        return self.perception.count_fingers()
+
+    def what_am_i_holding(self) -> str:
+        if self.perception is None:
+            return "El seguimiento de manos no está activo."
+        return self.perception.what_am_i_holding()
+
+    def affective_estimate(self) -> dict:
+        if self.perception is None:
+            return {"affective_state": "undetermined", "confidence": 0.0}
+        return self.perception.affective_estimate()
+
+    def capabilities(self, refresh: bool = False) -> dict:
+        """Mapa de capacidades reales (punto 18). Nunca lanza excepción."""
+        try:
+            if self.perception is not None:
+                return self.perception.capabilities(refresh=refresh).as_dict()
+            from vision import capabilities as caps_mod
+            return caps_mod.detect(settings=self.cfg, registry=self.registry,
+                                   privacy=self.privacy).as_dict()
+        except Exception:
+            return {}
+
+    def capabilities_report(self) -> str:
+        try:
+            if self.perception is not None:
+                return self.perception.capabilities(refresh=True).describe_es()
+            from vision import capabilities as caps_mod
+            return caps_mod.detect(settings=self.cfg, registry=self.registry,
+                                   privacy=self.privacy).describe_es()
+        except Exception as exc:
+            return f"No pude calcular las capacidades: {exc}"
+
+    def handle_voice(self, text: str) -> str | None:
+        """Procesa una orden hablada o escrita sobre la visión. None si no aplica."""
+        from vision import voice_intents
+        return voice_intents.handle(self.perception, text)
+
+    def forget_observations(self) -> int:
+        """Olvida todo lo observado ("olvida lo que viste")."""
+        if self.perception is not None:
+            return self.perception.forget()
+        return self.events.forget()
+
+    def set_privacy_mode(self, on: bool) -> str:
+        self.privacy.set_privacy_mode(bool(on))
+        self.events.set_muted(bool(on))
+        return ("Modo privacidad activado: no analizo nada de la cámara."
+                if on else "Modo privacidad desactivado.")
+
+    def privacy_report(self) -> str:
+        return self.privacy.describe_es()
+
+    def models_report(self) -> str:
+        return self.registry.describe()
+
+    def should_react(self, user_asked: bool = False) -> tuple[bool, str]:
+        """¿Debe YUE comentar algo por su cuenta? Por defecto, no."""
+        if self.perception is None:
+            return False, ""
+        return self.context_builder.should_react(
+            self.perception.snapshot(), self.events, user_asked=user_asked)
+
     def describe(self) -> str:
+        # Con el motor de percepción, la descripción prudente de la habitación
+        # es mucho mejor que el resumen clásico.
+        if self.perception is not None:
+            if not self.perception.running:
+                return "La cámara de visión no está activa ahora mismo."
+            return self.perception.describe_room()
         s = self.snapshot()
         if not s["camera"]["active"]:
             return "La cámara de visión no está activa ahora mismo."
@@ -247,6 +417,8 @@ class VisionSystem:
         return f"La escena parece: {scene.label} ({int(scene.confidence * 100)}%)."
 
     def metrics(self) -> dict:
+        if self.perception is not None:
+            return self.perception.metrics()
         return self.scheduler.metrics_dict()
 
     # -- segmentación bajo demanda ------------------------------------
@@ -266,8 +438,9 @@ class VisionSystem:
     def status_report(self) -> dict:
         c = self.cfg
         m = self.snapshot()
-        return {
-            "camara": "activa" if m["camera"]["active"] else "inactiva",
+        cam = m.get("camera", {}) or {}
+        base = {
+            "camara": "activa" if cam.get("active") else "inactiva",
             "rostro": "activo" if c.face_detector else "desactivado",
             "landmarks": "activo" if c.face_landmarker else "desactivado",
             "postura": "activa" if c.pose else "desactivada",
@@ -275,7 +448,19 @@ class VisionSystem:
             "objetos": "activos" if c.objects else "desactivados",
             "clasificador": "activo" if c.image_classifier else "desactivado",
             "segmentacion": "bajo demanda",
-            "fps_captura": m["camera"]["fps"],
+            "fps_captura": cam.get("fps", 0.0),
             "privacidad": "procesamiento local" if c.privacy_mode else "local",
             "modelos": self.models.status(),
         }
+        # ADITIVO: lo nuevo se añade sin romper a quien lea las claves de arriba.
+        if self.perception is not None:
+            base.update({
+                "motor": "percepción avanzada",
+                "ocr": "activo" if self.privacy.allows("ocr") else "desactivado",
+                "acciones": "activas" if self.privacy.allows("actions") else "desactivadas",
+                "emociones": "estimación activa" if self.privacy.allows("emotions") else "desactivadas",
+                "escena": "activa" if self.privacy.allows("scene") else "desactivada",
+                "modo_privacidad": self.privacy.is_private(),
+                "capacidades": self.capabilities(),
+            })
+        return base

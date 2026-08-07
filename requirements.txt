@@ -83,3 +83,23 @@ pymupdf>=1.24
 python-docx>=1.1     # .docx
 python-pptx>=0.6     # .pptx
 ebooklib>=0.18       # .epub (hay respaldo por ZIP si falta)
+
+# --- VISIÓN AVANZADA (OCR por cámara, escena, acciones, emociones) ---
+# opencv-python, mediapipe y numpy ya están arriba: son lo único obligatorio.
+# El OCR de cámara es OPCIONAL: sin ningún motor instalado, YUE sigue
+# funcionando y simplemente informa de que no puede leer textos.
+#
+# Elige UNO (todos locales y gratuitos, ninguno requiere clave ni pago):
+#
+#   PaddleOCR — mejor calidad en español, es el que YUE prefiere:
+#       pip install paddleocr paddlepaddle
+#
+#   EasyOCR — buena alternativa (descarga pesos la primera vez):
+#       pip install easyocr
+#
+#   Tesseract — ya viene con YUE (pytesseract, más arriba) para el OCR de
+#   pantalla; el motor de cámara lo reutiliza automáticamente como respaldo.
+#
+# Modelos de MediaPipe para manos/pose/objetos: van en models/vision/ y NO se
+# descargan solos. Ejecuta «/vision modelos» para ver cuáles faltan y de dónde
+# bajarlos. Si falta uno, solo ese módulo se desactiva.

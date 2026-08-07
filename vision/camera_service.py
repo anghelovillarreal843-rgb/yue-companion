@@ -33,37 +33,16 @@ log = logging.getLogger("vision.camera")
 
 
 def _default_capture_factory(index: int, width: int, height: int):
-    """Abre la webcam real con OpenCV. Devuelve el objeto capture o None."""
-    try:
-        import cv2  # import perezoso: sin OpenCV, sin cámara (pero sin romper)
-    except Exception as exc:  # pragma: no cover
-        log.error("Falta opencv-python: %s", exc)
-        return None
+    """Abre la webcam real probando y VALIDANDO backends.
 
-    backends = []
-    if platform.system().lower() == "windows" and hasattr(cv2, "CAP_DSHOW"):
-        backends.append(cv2.CAP_DSHOW)
-    backends.append(getattr(cv2, "CAP_ANY", 0))
-
-    for backend in backends:
-        cap = None
-        try:
-            cap = cv2.VideoCapture(index, backend)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # baja latencia
-            ok, frame = cap.read()
-            if cap.isOpened() and ok and frame is not None:
-                return cap
-            cap.release()
-        except Exception:
-            try:
-                if cap is not None:
-                    cap.release()
-            except Exception:
-                pass
-    return None
+    CORRECCIÓN: antes se daba la cámara por buena tras UNA sola lectura, no se
+    probaba MSMF (el backend nativo de Windows 10/11) y se aplicaba BUFFERSIZE
+    sobre DSHOW. Resultado en Windows: la cámara entregaba un fotograma y se
+    quedaba muda. Ahora `CaptureOpener` exige varias lecturas consecutivas y
+    recuerda el backend que de verdad funciona. Ver vision/camera_backend.py.
+    """
+    from vision.camera_backend import CaptureOpener
+    return CaptureOpener().open(index, width, height)
 
 
 class CameraService:
@@ -78,6 +57,7 @@ class CameraService:
         status_callback: Optional[Callable[[str, bool], None]] = None,
         capture_factory: Optional[Callable[[int, int, int], object]] = None,
         reconnect_interval: float = 3.0,
+        read_timeout: float = 2.5,
     ) -> None:
         self.hub = frame_hub
         self.index = int(index)
@@ -86,8 +66,15 @@ class CameraService:
         self.target_fps = max(1.0, float(target_fps))
         self.privacy_mode = bool(privacy_mode)
         self._status_cb = status_callback or (lambda _t, _a: None)
-        self._factory = capture_factory or _default_capture_factory
+        # Sin fábrica inyectada se usa el abridor con validación de backend, que
+        # además recuerda cuál funciona y se puede avisar si deja de servir.
+        if capture_factory is None:
+            from vision.camera_backend import CaptureOpener
+            self._factory = CaptureOpener()
+        else:
+            self._factory = capture_factory
         self._reconnect = max(0.5, float(reconnect_interval))
+        self._read_timeout = max(0.5, float(read_timeout))
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -146,18 +133,33 @@ class CameraService:
             self._emit(f"Cámara {self.index} activa (análisis local, sin guardar imágenes).", True)
             log.info("Cámara %s abierta (%sx%s @ %.0f FPS objetivo).",
                      self.index, self.width, self.height, self.target_fps)
-            failures = 0
+            # CORRECCIÓN: la tolerancia a fallos es TEMPORAL, no por contador.
+            # Un contador de 5 fallos con esperas de 0,2 s tumbaba la cámara en
+            # un segundo ante cualquier microcorte, y provocaba un ciclo de
+            # reconexión de 3 s en el que apenas llegaba un fotograma.
+            frames_ok = 0
+            primer_fallo = 0.0
             try:
                 while not self._stop.is_set():
                     ok, frame = self._safe_read(cap)
                     if not ok or frame is None:
-                        failures += 1
-                        if failures >= 5:
-                            log.warning("Cámara %s dejó de responder; reconecto.", self.index)
+                        ahora = time.monotonic()
+                        if primer_fallo == 0.0:
+                            primer_fallo = ahora
+                        elif (ahora - primer_fallo) >= self._read_timeout:
+                            log.warning(
+                                "La cámara %s lleva %.1f s sin entregar fotogramas "
+                                "(%d recibidos); reconecto.",
+                                self.index, ahora - primer_fallo, frames_ok)
+                            # Si murió casi sin dar nada, el backend es el
+                            # culpable: que el abridor pruebe otro distinto.
+                            if frames_ok < 5:
+                                self._report_backend_failure()
                             break
-                        self._stop.wait(0.2)
+                        self._stop.wait(0.05)
                         continue
-                    failures = 0
+                    primer_fallo = 0.0
+                    frames_ok += 1
                     self.hub.publish(frame)
                     self._stop.wait(pause)
             finally:
@@ -166,6 +168,15 @@ class CameraService:
 
             if not self._stop.is_set():
                 self._stop.wait(self._reconnect)
+
+    def _report_backend_failure(self) -> None:
+        """Avisa al abridor de que su backend preferido dejó de servir."""
+        reporter = getattr(self._factory, "report_failure", None)
+        if callable(reporter):
+            try:
+                reporter()
+            except Exception:
+                pass
 
     def _safe_open(self):
         try:

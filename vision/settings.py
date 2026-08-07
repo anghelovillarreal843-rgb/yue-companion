@@ -76,6 +76,30 @@ def get_str(name: str, default: str) -> str:
     return str(v).strip()
 
 
+def _languages(raw: str) -> tuple:
+    """Convierte 'es,en' en ('es', 'en'). Español si viene vacío."""
+    if isinstance(raw, (list, tuple)):
+        items = [str(x).strip().lower() for x in raw]
+    else:
+        items = [p.strip().lower() for p in str(raw or "").replace(";", ",").split(",")]
+    items = [i for i in items if i]
+    return tuple(items) or ("es",)
+
+
+def get_fps(name: str, default: float) -> float:
+    """FPS con convención de YUE: 0 (o negativo) significa «usa el perfil».
+
+    CORRECCIÓN: `config.py` declara los FPS con valor 0 documentado como «usa el
+    valor del perfil de rendimiento», pero `get_float` los devolvía tal cual.
+    El resultado era que la captura corría a 1 FPS (por el `max(1.0, ...)` del
+    CameraService) y que TODOS los módulos quedaban desactivados, porque el
+    planificador entiende `fps <= 0` como «módulo apagado». Aquí se respeta la
+    convención documentada.
+    """
+    value = get_float(name, default)
+    return float(default) if value <= 0 else value
+
+
 # ---------------------------------------------------------------------------
 # Perfiles de rendimiento (paso 24 del pedido): low / balanced / high.
 # Ajustan resolución y FPS por defecto. Cada FPS concreto puede sobrescribirse
@@ -157,6 +181,55 @@ class VisionSettings:
 
     performance_mode: str
 
+    # ------------------------------------------------------------------
+    # ADITIVO (visión avanzada): todo lo de abajo tiene valor por defecto, así
+    # que cualquier código que construya `VisionSettings` a mano sigue igual.
+    # ------------------------------------------------------------------
+    # Percepción avanzada
+    perception_enabled: bool = False
+    hands_enabled: bool = True
+    hand_fps: float = 12.0
+    max_people: int = 4
+    device: str = "auto"
+    debug: bool = False
+
+    # OCR
+    ocr_enabled: bool = True
+    ocr_only_on_request: bool = True
+    ocr_engine: str = "auto"
+    ocr_languages: tuple = ("es",)
+    ocr_min_agreements: int = 3
+    ocr_min_confidence: float = 0.35
+
+    # Escena, acciones y emociones
+    scene_description_enabled: bool = True
+    scene_fps: float = 0.3
+    actions_enabled: bool = True
+    action_fps: float = 6.0
+    emotions_enabled: bool = True
+    emotion_min_confidence: float = 0.45
+    emotion_use_voice: bool = False
+    text_watch_fps: float = 0.5
+
+    # Privacidad avanzada
+    process_local: bool = True
+    save_events: bool = False
+    allow_cloud: bool = False
+    only_on_request: bool = False
+
+    # Eventos
+    event_min_duration: float = 0.45
+    event_cooldown: float = 4.0
+
+    # Modelos
+    model_variant: str = "full"
+    allow_download: bool = False
+
+    # Migración
+    replace_legacy: bool = False
+    auto_search_camera: bool = True
+    max_camera_index: int = 4
+
 
 def load() -> VisionSettings:
     """Construye un `VisionSettings` desde config/entorno, aplicando el perfil."""
@@ -174,7 +247,7 @@ def load() -> VisionSettings:
         camera_index=get_int("CAMERA_INDEX", 0),
         width=get_int("CAMERA_WIDTH", preset.width),
         height=get_int("CAMERA_HEIGHT", preset.height),
-        target_fps=get_float("CAMERA_TARGET_FPS", preset.capture_fps),
+        target_fps=get_fps("CAMERA_TARGET_FPS", preset.capture_fps),
         privacy_mode=get_bool("CAMERA_PRIVACY_MODE", True),
         face_detector=get_bool("VISION_FACE_DETECTOR_ENABLED", True),
         face_landmarker=face_landmarker,
@@ -185,12 +258,12 @@ def load() -> VisionSettings:
         image_segmenter=get_bool("VISION_IMAGE_SEGMENTER_ENABLED", False),
         interactive_segmenter=get_bool("VISION_INTERACTIVE_SEGMENTER_ENABLED", False),
         holistic=holistic,
-        face_fps=get_float("VISION_FACE_DETECTOR_FPS", preset.face_fps),
-        landmark_fps=get_float("VISION_FACE_LANDMARKER_FPS", preset.landmark_fps),
-        pose_fps=get_float("VISION_POSE_FPS", preset.pose_fps),
-        gesture_fps=get_float("VISION_GESTURE_FPS", preset.gesture_fps),
-        object_fps=get_float("VISION_OBJECT_FPS", preset.object_fps),
-        classifier_fps=get_float("VISION_CLASSIFIER_FPS", preset.classifier_fps or 0.2),
+        face_fps=get_fps("VISION_FACE_DETECTOR_FPS", preset.face_fps),
+        landmark_fps=get_fps("VISION_FACE_LANDMARKER_FPS", preset.landmark_fps),
+        pose_fps=get_fps("VISION_POSE_FPS", preset.pose_fps),
+        gesture_fps=get_fps("VISION_GESTURE_FPS", preset.gesture_fps),
+        object_fps=get_fps("VISION_OBJECT_FPS", preset.object_fps),
+        classifier_fps=get_fps("VISION_CLASSIFIER_FPS", preset.classifier_fps or 0.2),
         max_faces=get_int("VISION_MAX_FACES", 3),
         max_hands=get_int("VISION_MAX_HANDS", 2),
         face_min_conf=get_float("VISION_FACE_MIN_CONFIDENCE", 0.5),
@@ -201,4 +274,52 @@ def load() -> VisionSettings:
         external_upload=get_bool("VISION_EXTERNAL_UPLOAD", False),
         debug_overlay=get_bool("VISION_DEBUG_OVERLAY", False),
         performance_mode=preset.name,
+
+        # --- ADITIVO: visión avanzada ---------------------------------
+        # Motor de percepción (OCR, escena, acciones, emociones). Va dentro del
+        # mismo interruptor maestro VISION_MP_ENABLED, con su propio apagado.
+        perception_enabled=get_bool("VISION_PERCEPTION_ENABLED", True),
+        hands_enabled=get_bool("VISION_HANDS_ENABLED", True) and not holistic,
+        hand_fps=get_fps("VISION_HAND_FPS", preset.gesture_fps),
+        max_people=get_int("VISION_MAX_PEOPLE", 4),
+        device=get_str("VISION_DEVICE", "auto"),
+        debug=get_bool("VISION_DEBUG", False),
+
+        # OCR por cámara
+        ocr_enabled=get_bool("VISION_OCR_ENABLED", True),
+        ocr_only_on_request=get_bool("VISION_OCR_ONLY_ON_REQUEST", True),
+        ocr_engine=get_str("VISION_OCR_ENGINE", "auto"),
+        ocr_languages=_languages(get_str("VISION_OCR_LANGUAGES", "es")),
+        ocr_min_agreements=get_int("VISION_OCR_MIN_AGREEMENTS", 3),
+        ocr_min_confidence=get_float("VISION_OCR_MIN_CONFIDENCE", 0.35),
+
+        # Escena, acciones y emociones
+        scene_description_enabled=get_bool("VISION_SCENE_DESCRIPTION_ENABLED", True),
+        scene_fps=get_fps("VISION_SCENE_FPS", 0.3),
+        actions_enabled=get_bool("VISION_ACTIONS_ENABLED", True),
+        action_fps=get_fps("VISION_ACTION_FPS", 6.0),
+        emotions_enabled=get_bool("VISION_EMOTIONS_ENABLED", True),
+        emotion_min_confidence=get_float("VISION_EMOTION_MIN_CONFIDENCE", 0.45),
+        # La voz SOLO se usa como señal afectiva con permiso explícito.
+        emotion_use_voice=get_bool("VISION_EMOTION_USE_VOICE", False),
+        text_watch_fps=get_fps("VISION_TEXT_WATCH_FPS", 0.5),
+
+        # Privacidad avanzada
+        process_local=get_bool("VISION_PROCESS_LOCAL", True),
+        save_events=get_bool("VISION_SAVE_EVENTS", False),
+        allow_cloud=get_bool("VISION_ALLOW_CLOUD", False),
+        only_on_request=get_bool("VISION_ONLY_ON_REQUEST", False),
+
+        # Antirrebote de eventos
+        event_min_duration=get_float("VISION_EVENT_MIN_DURATION", 0.45),
+        event_cooldown=get_float("VISION_EVENT_COOLDOWN", 4.0),
+
+        # Modelos
+        model_variant=get_str("VISION_MODEL_VARIANT", "full"),
+        allow_download=get_bool("VISION_ALLOW_DOWNLOAD", False),
+
+        # Migración desde el observador clásico
+        replace_legacy=get_bool("VISION_REPLACE_LEGACY", False),
+        auto_search_camera=get_bool("VISION_AUTO_SEARCH_CAMERA", True),
+        max_camera_index=get_int("VISION_MAX_CAMERA_INDEX", 4),
     )
