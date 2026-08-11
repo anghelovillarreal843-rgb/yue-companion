@@ -33,8 +33,10 @@ from vision.vision_state_fusion import VisionStateFusion
 from vision.camera_manager import CameraManager
 from vision.context_builder import VisionContextBuilder
 from vision.event_manager import EventManager
+from vision.live_state import LiveVisionState
 from vision.models.model_registry import ModelRegistry
 from vision.privacy_manager import from_settings as privacy_from_settings
+from vision.reactive_layer import ReactiveLayer
 
 log = logging.getLogger("vision.controller")
 
@@ -48,6 +50,11 @@ class VisionSystem:
         model_dir=None,
         camera_factory=None,           # para pruebas sin webcam
         settings=None,                 # inyectable en pruebas
+        # --- ADITIVO: enganches de la capa reactiva. Todos opcionales, así que
+        # cualquier código que ya construía VisionSystem sigue igual. ---
+        on_avatar_gesture=None,        # (nombre, ganancia) -> None  (pet.play_gesture)
+        can_speak=None,                # () -> bool   ¿puede YUE hablar ahora?
+        can_animate=None,              # () -> bool   ¿la cara del avatar está libre?
     ) -> None:
         self.cfg = settings or settings_mod.load()
         self.models = ModelManager(base_dir=model_dir)
@@ -119,6 +126,48 @@ class VisionSystem:
                 log.warning("No pude montar el motor de percepción: %s", exc)
                 self.perception = None
 
+        # ------------------------------------------------------------------
+        # ADITIVO (capa reactiva): AQUÍ estaba el eslabón roto.
+        #
+        # `AvatarBridge` se suscribe a `VisionState`, que solo se alimenta desde
+        # el camino CLÁSICO (`fusion.update_*`). Pero en cuanto el motor de
+        # percepción arranca, `start()` devuelve antes de registrar ese camino:
+        # los jobs clásicos no existen, `VisionState` no recibe nada y el puente
+        # del avatar no se dispara jamás. Y el `EventManager` del motor —que sí
+        # emite gestos, emociones, acciones y texto— NO tenía ni un suscriptor.
+        #
+        # La percepción funcionaba entera y terminaba en un callejón sin salida.
+        # `ReactiveLayer` cierra el circuito: se suscribe a los eventos, bombea
+        # el snapshot a `LiveVisionState` y traduce todo a avatar + voz.
+        # ------------------------------------------------------------------
+        self.live_state = LiveVisionState()
+        self.reactive = None
+        if self.perception is not None and getattr(self.cfg, "reactive_enabled", True):
+            try:
+                self.reactive = ReactiveLayer(
+                    self.perception,
+                    self.events,
+                    privacy=self.privacy,
+                    state=self.live_state,
+                    on_avatar_emotion=(
+                        on_avatar_emotion if getattr(self.cfg, "reactive_avatar", True)
+                        else None
+                    ),
+                    on_avatar_gesture=(
+                        on_avatar_gesture if getattr(self.cfg, "reactive_avatar", True)
+                        else None
+                    ),
+                    on_speak=(
+                        on_speak if getattr(self.cfg, "reactive_speech", True) else None
+                    ),
+                    can_speak=can_speak,
+                    can_animate=can_animate,
+                    settings=self.cfg,
+                )
+            except Exception as exc:
+                log.warning("No pude montar la capa reactiva: %s", exc)
+                self.reactive = None
+
         # Detectores (se construyen perezosamente al primer uso).
         self._face = self._pose = self._land = self._gesture = self._objects = None
         self._classifier = None
@@ -161,11 +210,23 @@ class VisionSystem:
         if self.perception is not None:
             ok = self.perception.start()
             if ok:
+                # ADITIVO: sin esto la percepción corre pero no mueve nada.
+                if self.reactive is not None:
+                    try:
+                        self.reactive.start()
+                    except Exception as exc:
+                        log.warning("No pude arrancar la capa reactiva: %s", exc)
                 log.info("Sistema de visión iniciado con motor de percepción (%s).",
                          self.cfg.performance_mode)
                 return
             log.warning("El motor de percepción no arrancó; uso el camino clásico.")
             self.perception = None
+            if self.reactive is not None:
+                try:
+                    self.reactive.stop()
+                except Exception:
+                    pass
+                self.reactive = None
 
         self._build_detectors()
         self._register_jobs()
@@ -174,6 +235,13 @@ class VisionSystem:
         log.info("Sistema de visión MP iniciado (%s).", self.cfg.performance_mode)
 
     def stop(self) -> None:
+        # La capa reactiva se para PRIMERO: si se parara después seguiría
+        # pidiendo snapshots a un motor ya cerrado.
+        if getattr(self, "reactive", None) is not None:
+            try:
+                self.reactive.stop()
+            except Exception as exc:
+                log.debug("fallo deteniendo la capa reactiva: %s", exc)
         if self.perception is not None:
             try:
                 self.perception.stop()
@@ -298,6 +366,42 @@ class VisionSystem:
             return ctx.text
         return build_visual_context(self.snapshot())
 
+    # --- ADITIVO: el estado vivo (punto 10 del pedido) -----------------
+    # Esta es la puerta que debe usar TODO el resto de YUE. Devuelve siempre un
+    # diccionario con la forma completa (nunca None, nunca claves ausentes),
+    # aunque la cámara esté apagada: así quien lo consulte no necesita defensas.
+    def vision_state(self) -> dict:
+        """`vision_state` en español: personas, emociones, objetos, gestos,
+        texto, postura, mirada, escena y marca de última actualización."""
+        if self.perception is not None and self.reactive is None:
+            # Sin capa reactiva nadie bombea el estado: se refresca al vuelo.
+            try:
+                self.live_state.update_from_snapshot(self.perception.snapshot())
+            except Exception:
+                pass
+        return self.live_state.get()
+
+    def vision_state_fresh(self, max_age: float = 5.0) -> bool:
+        """False si el estado está viejo (cámara caída o percepción parada)."""
+        return self.live_state.fresco(max_age)
+
+    def resumen_visual(self) -> str:
+        """Una línea legible con lo que YUE ve ahora mismo."""
+        return self.live_state.resumen()
+
+    # --- atajos, para no obligar a nadie a navegar el diccionario -------
+    def hay_persona(self) -> bool:
+        return self.live_state.hay_persona()
+
+    def mira_a_yue(self) -> bool:
+        return self.live_state.mira_a_yue()
+
+    def emocion_usuario(self) -> str:
+        return self.live_state.emocion()
+
+    def ve_objeto(self, *etiquetas: str) -> bool:
+        return self.live_state.ve_objeto(*etiquetas)
+
     # --- ADITIVO: funciones de la visión avanzada ---------------------
     def read_text(self, only_title: bool = False):
         """Lee el texto mostrado a la cámara. None si no hay nada estable."""
@@ -356,10 +460,24 @@ class VisionSystem:
     def handle_voice(self, text: str) -> str | None:
         """Procesa una orden hablada o escrita sobre la visión. None si no aplica."""
         from vision import voice_intents
-        return voice_intents.handle(self.perception, text)
+        # ADITIVO: se pasa el estado vivo para que las preguntas directas
+        # ("¿cuántas personas hay?") se contesten del dato ya bombeado.
+        return voice_intents.handle(self.perception, text, state=self.live_state)
 
     def forget_observations(self) -> int:
         """Olvida todo lo observado ("olvida lo que viste")."""
+        # ADITIVO: el estado vivo y los enfriamientos también se olvidan; si no,
+        # YUE "olvidaba" pero seguía sabiendo que tienes un libro delante.
+        if getattr(self, "reactive", None) is not None:
+            try:
+                self.reactive.reset()
+            except Exception:
+                pass
+        else:
+            try:
+                self.live_state.reset()
+            except Exception:
+                pass
         if self.perception is not None:
             return self.perception.forget()
         return self.events.forget()

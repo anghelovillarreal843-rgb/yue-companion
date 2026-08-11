@@ -93,6 +93,10 @@ class VisualAnalysis:
     scene_change: float = 0.0
     importance: float = 0.0
     emotion_weights: dict[str, float] = field(default_factory=dict)
+    # NUEVO: qué cambió respecto a los frames anteriores ("antes estaba sentado,
+    # ahora está de pie"). Vacío o "sin evidencia suficiente" cuando no se puede
+    # afirmar nada: NUNCA se inventa continuidad.
+    temporal_change: str = ""
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,12 @@ def parse_visual_response(text: str, change_score: float = 0.0) -> VisualAnalysi
     content_type = str(data.get("tipo_contenido") or data.get("content_type") or "").strip()[:80]
     importance = _clamp(data.get("importancia", data.get("importance", 0.4)))
     declared_change = _clamp(data.get("cambio_escena", data.get("scene_change", change_score)))
+    temporal_change = str(
+        data.get("cambio_respecto_antes") or data.get("temporal_change") or "").strip()[:200]
+    # Si el modelo admite que no tiene evidencia, no lo guardamos como si fuera
+    # una observación: así la capa conversacional no lo repite como un hecho.
+    if temporal_change.lower().startswith("sin evidencia"):
+        temporal_change = ""
     combined = " ".join((summary, " ".join(expressions), " ".join(emotions), environment))
     weights = _weights_from_visual_text(combined)
     return VisualAnalysis(
@@ -334,6 +344,7 @@ def parse_visual_response(text: str, change_score: float = 0.0) -> VisualAnalysi
         scene_change=max(_clamp(change_score), declared_change),
         importance=importance,
         emotion_weights=weights,
+        temporal_change=temporal_change,
     )
 
 
@@ -604,6 +615,15 @@ class MediaCompanion:
         self._session_id: int | None = None
         self._session_started = 0.0
         self._last_frame_signature = None
+        # NUEVO (memoria temporal): últimos frames observados (t-4 … t) con su
+        # resumen. Sirve para entender CAMBIOS ("antes estaba sentado, ahora se
+        # levantó") sin mandar los cinco frames en cada petición.
+        self._frame_memory: deque = deque(
+            maxlen=max(2, int(_cfg("MEDIA_COMPANION_TEMPORAL_FRAMES", 5))))
+        self._last_keyframe_b64 = ""
+        # Detección de VÍDEO SIN AUDIO: movimiento sostenido en pantalla.
+        self._silent_video_score = 0.0
+        self._silent_video_since = 0.0
         self._last_visual_submit = 0.0
         self._last_visual_result = 0.0
         self._vision_retry_at = 0.0
@@ -708,9 +728,19 @@ class MediaCompanion:
             )
         if visual and (time.time() - visual.timestamp) <= max_age and visual.summary:
             pieces.append("escena: " + visual.summary[:180])
+            # NUEVO: el cambio respecto a lo anterior, solo si el modelo tuvo
+            # evidencia suficiente (si no, el parser lo deja vacío).
+            if getattr(visual, "temporal_change", ""):
+                pieces.append("cambio reciente: " + visual.temporal_change[:140])
+        # NUEVO: vídeo SILENCIADO. Aunque no haya audio, si hay movimiento
+        # sostenido en pantalla YUE debe saber que está viendo algo.
+        if not playing and self.silent_video_detected():
+            pieces.append("hay vídeo en pantalla sin sonido (detectado por movimiento)")
         if not pieces:
             return ""
         state = "reproduciéndose" if playing else "reproducido hace poco"
+        if not playing and self.silent_video_detected():
+            state = "en pantalla (sin audio)"
         return state + "; " + "; ".join(pieces) + "."
 
     def emotional_snapshot(self) -> dict[str, float]:
@@ -720,6 +750,7 @@ class MediaCompanion:
     def _run(self):
         last = time.monotonic()
         next_capture = 0.0
+        next_silent_probe = 0.0
         while not self._stop.is_set():
             now_mono = time.monotonic()
             dt = max(0.01, min(now_mono - last, 0.5))
@@ -741,6 +772,15 @@ class MediaCompanion:
             else:
                 # Continúa el decaimiento unos segundos para volver suavemente a neutral.
                 self._emit_continuous_emotion(emotion_name, intensity, now_mono)
+                # NUEVO (vídeo sin audio): sondeo BARATO de movimiento aunque no
+                # suene nada. Antes el modo multimedia solo despertaba cuando el
+                # detector acústico oía algo, así que un vídeo silenciado pasaba
+                # totalmente desapercibido. Esto NO llama a ningún modelo: solo
+                # compara dos miniaturas cada pocos segundos.
+                if self.visual_enabled and now_mono >= next_silent_probe:
+                    self._probe_silent_video()
+                    next_silent_probe = now_mono + max(
+                        1.0, float(_cfg("MEDIA_COMPANION_SILENT_PROBE_INTERVAL", 2.5)))
                 self._wake.wait(timeout=0.35)
                 self._wake.clear()
 
@@ -792,15 +832,45 @@ class MediaCompanion:
             self._last_frame_signature = signature
             now = time.time()
             stale = (now - self._last_visual_submit) >= self.visual_stale_seconds
+            # Movimiento sostenido = hay vídeo aunque esté SILENCIADO.
+            self._track_silent_video(change, now)
             if change >= self.visual_change_threshold or stale:
                 b64 = self._encode_frame(image)
                 self._source = self._scan_source()
-                self._offer_vision((b64, change, self._source))
+                # Se manda también un resumen corto de lo ya observado, para que
+                # el modelo pueda comparar en vez de describir cada frame como
+                # una fotografía independiente.
+                self._offer_vision((b64, change, self._source, self._temporal_brief()))
                 self._last_visual_submit = now
             return self._adaptive_interval(change)
         except Exception as exc:
             self._emit_status(f"Visión multimedia temporalmente no disponible: {exc}", self.active)
             return self.visual_max
+
+    def _probe_silent_video(self):
+        """Mide el movimiento de pantalla SIN llamar a ningún modelo.
+
+        Solo captura, enmascara el avatar y compara firmas perceptuales. Es lo
+        que permite que YUE se dé cuenta de que hay un vídeo aunque esté
+        silenciado (o con el volumen a cero).
+        """
+        if screen_capture is None or screen_diff is None:
+            return
+        try:
+            image = screen_capture._grab()
+            image = self._mask_yue_region(image)
+            signature = screen_diff.signature_from_image(image)
+            previa = self._last_frame_signature
+            change = self._change_score(previa, signature)
+            self._last_frame_signature = signature
+            # La PRIMERA muestra no tiene con qué compararse (_change_score
+            # devuelve 1.0 ante la duda) y dispararía un falso "hay vídeo".
+            if previa is None:
+                return
+            self._track_silent_video(change, time.time())
+        except Exception:
+            # Un fallo de captura aquí no debe molestar: es un sondeo opcional.
+            pass
 
     def _mask_yue_region(self, image):
         """Evita que el propio avatar provoque falsos cambios de escena."""
@@ -872,7 +942,12 @@ class MediaCompanion:
                 continue
             if item is None:
                 continue
-            b64, change, source = item
+            # Compatibilidad: los items antiguos venían con 3 campos.
+            if len(item) == 4:
+                b64, change, source, historial = item
+            else:
+                b64, change, source = item
+                historial = ""
             if time.time() < self._vision_retry_at:
                 continue
             try:
@@ -883,7 +958,7 @@ class MediaCompanion:
                     "multimedia visible; no identifiques personas reales ni guardes datos. "
                     "Devuelve únicamente JSON válido y breve.",
                     b64,
-                    self._vision_instruction(change, source),
+                    self._vision_instruction(change, source, historial),
                     timeout=float(_cfg("MEDIA_COMPANION_VISION_TIMEOUT", 18.0)),
                 )
                 visual = parse_visual_response(text, change)
@@ -891,6 +966,8 @@ class MediaCompanion:
                     self._visual = visual
                     self._source = source
                 self._last_visual_result = time.time()
+                self._remember_frame(visual, change)
+                self._last_keyframe_b64 = b64
                 self._refresh_target()
                 self._remember_visual_event(visual)
                 self._wake.set()
@@ -900,17 +977,119 @@ class MediaCompanion:
                 self._emit_status(f"Análisis visual multimedia pausado: {exc}", self.active)
 
     @staticmethod
-    def _vision_instruction(change: float, source: MediaSource) -> str:
-        return (
-            "Analiza este frame individual, no inventes continuidad ni spoilers. "
-            "Responde con este JSON exacto: "
+    def _vision_instruction(change: float, source: MediaSource,
+                            historial: str = "") -> str:
+        """Instrucción del frame actual, con memoria temporal corta opcional.
+
+        MEJORADO: antes cada frame se analizaba como una fotografía totalmente
+        independiente ("no inventes continuidad"), así que YUE no podía notar
+        cambios básicos. Ahora recibe un RESUMEN de lo observado en los frames
+        anteriores (no las imágenes: sale casi gratis) y puede decir "antes
+        estaba sentado y ahora se levantó". La regla de no inventar sigue en pie:
+        si la evidencia temporal no basta, debe decirlo en `cambio_respecto_antes`.
+        """
+        base = (
+            "Analiza el frame ACTUAL. No inventes spoilers ni des por hecho nada "
+            "que no se vea. Responde con este JSON exacto: "
             '{"resumen":"máx. 18 palabras","personas":[],"expresiones":[],"emociones":[],'
             '"colores":[],"acciones":[],"objetos":[],"texto_visible":"",'
-            '"ambiente":"","tipo_contenido":"","cambio_escena":0.0,"importancia":0.0}. '
+            '"ambiente":"","tipo_contenido":"","cambio_escena":0.0,"importancia":0.0,'
+            '"cambio_respecto_antes":""}. '
             "cambio_escena e importancia van de 0 a 1. "
             f"Cambio visual local estimado={change:.2f}; fuente={source.source}; "
             f"aplicación={source.app or 'desconocida'}."
         )
+        if historial:
+            base += (
+                "\n\nObservaciones ANTERIORES (resumen, de más antigua a más "
+                f"reciente):\n{historial}\n"
+                "En `cambio_respecto_antes` di en pocas palabras QUÉ CAMBIÓ "
+                "respecto a eso (por ejemplo: «antes estaba sentado, ahora está de "
+                "pie»). Si no hay evidencia suficiente para afirmar un cambio, "
+                "escribe exactamente «sin evidencia suficiente». NO inventes "
+                "continuidad."
+            )
+        return base
+
+    # ---- memoria temporal de frames --------------------------------------
+    def _remember_frame(self, visual, change: float):
+        """Guarda un resumen del frame recién analizado (t-4 … t)."""
+        try:
+            resumen = str(getattr(visual, "summary", "") or "").strip()
+            if not resumen:
+                acciones = list(getattr(visual, "actions", []) or [])
+                resumen = ", ".join(str(a) for a in acciones[:3])
+            if not resumen:
+                return
+            self._frame_memory.append({
+                "t": time.time(),
+                "resumen": resumen[:140],
+                "cambio": round(float(change), 3),
+            })
+        except Exception:
+            pass
+
+    def _temporal_brief(self, max_items: int = 4) -> str:
+        """Resumen textual de los frames anteriores para el prompt.
+
+        Es texto, no imágenes: mantiene el coste prácticamente igual que antes.
+        """
+        if not self._frame_memory:
+            return ""
+        ahora = time.time()
+        lineas = []
+        for entrada in list(self._frame_memory)[-int(max_items):]:
+            edad = max(0, int(ahora - float(entrada.get("t", ahora))))
+            lineas.append(f"- hace {edad}s: {entrada.get('resumen', '')}")
+        return "\n".join(lineas)
+
+    # ---- vídeo SIN audio --------------------------------------------------
+    def _track_silent_video(self, change: float, now: float):
+        """Detecta vídeo por MOVIMIENTO, sin depender del audio del sistema.
+
+        El modo multimedia se encendía solo cuando el detector acústico oía algo.
+        Con un vídeo silenciado (o con el volumen a cero) YUE no se enteraba de
+        que había vídeo. Aquí se mantiene una media móvil del cambio visual: si
+        se sostiene por encima del umbral, hay vídeo aunque no suene nada.
+        """
+        umbral = float(_cfg("MEDIA_COMPANION_SILENT_VIDEO_MOTION", 0.12))
+        piso = float(_cfg("MEDIA_COMPANION_SILENT_VIDEO_FLOOR", 0.02))
+        # Media móvil suave: un cambio puntual (abrir un menú) no cuenta.
+        self._silent_video_score = (self._silent_video_score * 0.72) + (float(change) * 0.28)
+        # La media sola NO basta: un único cambio brusco la deja alta varios
+        # segundos mientras decae, y eso bastaba para declarar "hay vídeo" con la
+        # pantalla ya quieta. Exigimos además que el frame ACTUAL siga moviéndose.
+        if float(change) < piso:
+            self._silent_video_since = 0.0
+            return
+        if self._silent_video_score >= umbral:
+            if not self._silent_video_since:
+                self._silent_video_since = now
+        else:
+            self._silent_video_since = 0.0
+
+    def silent_video_detected(self, min_seconds: float = None,
+                              now: float = None) -> bool:
+        """True si hay movimiento sostenido compatible con un vídeo silenciado.
+
+        `now` es inyectable para poder probarlo sin depender del reloj real.
+        """
+        if not self._silent_video_since:
+            return False
+        minimo = float(min_seconds if min_seconds is not None
+                       else _cfg("MEDIA_COMPANION_SILENT_VIDEO_SECONDS", 4.0))
+        ahora = float(now if now is not None else time.time())
+        return (ahora - self._silent_video_since) >= minimo
+
+    def visual_activity(self) -> dict:
+        """Estado visual para diagnóstico y para la capa conversacional."""
+        return {
+            "movimiento": round(self._silent_video_score, 3),
+            "video_silencioso": self.silent_video_detected(),
+            "frames_recordados": len(self._frame_memory),
+            "ultimo_resumen": (self._frame_memory[-1].get("resumen", "")
+                               if self._frame_memory else ""),
+        }
 
     # ---- objetivo emocional ---------------------------------------------
     def _refresh_target(self):

@@ -1,0 +1,85 @@
+YUE · PARCHE: una sola cuenta Groq + sin ingles raro + respuestas rapidas
+========================================================================
+
+COMO INSTALARLO
+---------------
+Copia estas carpetas y archivos ENCIMA de tu proyecto yue_companion,
+respetando las rutas. Sobrescribe cuando te lo pregunte.
+
+  config.py                       -> yue_companion/config.py
+  core/ai_router.py               -> yue_companion/core/ai_router.py
+  core/ai_fallback.py             -> yue_companion/core/ai_fallback.py
+  core/ai_engine.py               -> yue_companion/core/ai_engine.py
+  core/emotion.py                 -> yue_companion/core/emotion.py
+  core/personality.py             -> yue_companion/core/personality.py
+  core/text_sanitizer.py          -> NUEVO
+  core/groq_tuning.py             -> NUEVO
+  tests/test_respuesta_limpia.py  -> NUEVO
+  tests/test_ai_router.py         -> yue_companion/tests/test_ai_router.py
+  .env                            -> yue_companion/.env
+  env_EJEMPLO.txt                 -> yue_companion/env_EJEMPLO.txt
+
+OJO CON EL .env
+---------------
+El .env que va aqui es EL TUYO con las lineas nuevas ya puestas. Si desde que
+me lo pasaste le cambiaste algo, NO lo sobrescribas: abre el tuyo y anade a
+mano solo estas lineas.
+
+  GROQ_UNA_SOLA_CUENTA=true
+  GROQ_SIN_RAZONAMIENTO=true
+  GROQ_MAX_TOKENS_CHAT=220
+  FORZAR_ESPANOL=true
+
+Y deja vacias (o borra) GROQ_API_KEYS y GROQ_API_KEY_2, _3, _4.
+
+
+COMPROBAR QUE FUNCIONA
+----------------------
+Desde la carpeta del proyecto:
+
+  python tests/test_respuesta_limpia.py     (deben salir 14 OK)
+  python tests/diagnostico_groq.py          (mira que modelo usa de verdad)
+
+Luego arranca YUE normal y hablale. Ya no deberia soltar parrafos en ingles
+ni tardar tanto en contestar.
+
+
+QUE HACE CADA COSA
+------------------
+1) UNA SOLA CUENTA DE GROQ
+   Solo se usa GROQ_API_KEY. Se acabo el relevo entre varias claves. Si esa
+   clave falla, YUE lo dice claro en vez de saltar a otra por detras.
+   El modo antiguo sigue existiendo: GROQ_UNA_SOLA_CUENTA=false.
+
+2) SE ACABO EL INGLES RARO
+   Tu modelo (qwen3) es "de razonamiento": mete su monologo interno EN INGLES
+   dentro de la respuesta, entre etiquetas <think>...</think>. Nadie lo
+   recortaba, asi que la voz lo leia tal cual. Ahora hay tres redes:
+     - Se le pide a Groq que ni lo mande (reasoning_format=hidden).
+     - core/text_sanitizer.py lo recorta si aun asi llega.
+     - emotion.clean_response() lo vuelve a mirar justo antes de hablar.
+   Y si contestara en ingles igualmente, se pide UNA vez mas en espanol.
+
+3) RESPUESTAS RAPIDAS
+     - Sin razonamiento = cientos de tokens menos antes de la primera palabra.
+     - GROQ_MAX_TOKENS_CHAT=220: YUE habla de 1 a 4 frases, no necesita mas.
+     - Conexion HTTP reutilizada (keep-alive): antes cada mensaje abria un
+       TLS nuevo contra api.groq.com, unos 200-400 ms tirados por respuesta.
+
+
+SI ALGO VA MAL
+--------------
+Todo es reversible desde el .env, sin tocar codigo:
+
+  GROQ_SIN_RAZONAMIENTO=false   -> vuelve al comportamiento anterior
+  GROQ_MAX_TOKENS_CHAT=400      -> respuestas mas largas
+  FORZAR_ESPANOL=false          -> quita el reintento de idioma
+  GROQ_UNA_SOLA_CUENTA=false    -> vuelve el relevo entre varias claves
+
+
+DOS AVISOS
+----------
+- Tu API key de Groq viaja en texto plano dentro del .env. Revocala en
+  console.groq.com y genera una nueva.
+- Revisa que "qwen/qwen3.6-27b" sea un modelo real de tu cuenta. Si no existe,
+  estas cayendo en el fallback sin enterarte. Miralo con diagnostico_groq.py.

@@ -1,0 +1,40 @@
+YUE AHORA USA SOLO GROQ PARA CONVERSACION
+===========================================
+Configura GROQ_API_KEY en .env. Opcionalmente puedes añadir GROQ_API_KEY_2,
+GROQ_API_KEY_3, etc. Consulta CAMBIOS_GROQ.txt.
+
+INSTALACIÓN
+===========
+
+Copia estos archivos SOBRE tu proyecto yue_companion, respetando las carpetas.
+Todos son aditivos: no borran nada del código existente.
+
+  vision/live_state.py          <- NUEVO
+  vision/reactive_layer.py      <- NUEVO
+  vision/vision_log.py          <- NUEVO
+  tests/test_vision_reactiva.py <- NUEVO
+  CAMBIOS_PERCEPCION_VISUAL.md  <- NUEVO (léelo, explica los 8 fallos)
+
+  el resto reemplaza a tu versión actual.
+
+SOBRE EL .env
+-------------
+Tu .env solo GANA un bloque al final (la capa reactiva). Si prefieres no
+reemplazarlo, copia a mano las últimas 22 líneas de este .env.
+
+Lo importante es que NO hace falta tocar VISION_CAMERA_ENABLED: el arreglo de
+get_bool() hace que la cadena vacía vuelva a significar "sin definir", que es
+lo que config.py siempre quiso decir.
+
+COMPROBAR QUE FUNCIONA
+----------------------
+  python -m unittest tests.test_vision_reactiva      (39 pruebas, sin webcam)
+  python -m unittest tests.test_vision_avanzada      (79, las de siempre)
+  python -m unittest tests.test_vision_system        (22, las de siempre)
+
+Luego arranca YUE y busca esta línea en consola:
+
+  [vision] Percepción conectada al comportamiento de YUE.
+
+Si no aparece, la capa reactiva no arrancó. Escribe /vision reactiva en el chat
+para ver por qué.

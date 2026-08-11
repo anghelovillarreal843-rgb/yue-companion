@@ -98,10 +98,37 @@ def post_chat(base: str, api_key: str, payload: dict, timeout: int = 45) -> dict
     Lanza ModelGoneError si el problema es el modelo, GroqError si es otra cosa.
     """
     url = f"{base}/chat/completions"
+
+    # NUEVO: misma sesión HTTP para todas las llamadas (keep-alive). Ahorra el
+    # saludo TLS de cada mensaje, que era medio segundo de espera por respuesta.
     try:
-        resp = requests.post(url, json=payload, headers=_headers(api_key), timeout=timeout)
-    except requests.RequestException as exc:
-        raise GroqError(f"No pude hablar con Groq: {exc}") from exc
+        from core import groq_tuning
+        cliente = groq_tuning.sesion() or requests
+    except Exception:
+        groq_tuning = None
+        cliente = requests
+
+    intentos_param = 0
+    while True:
+        try:
+            resp = cliente.post(url, json=payload, headers=_headers(api_key), timeout=timeout)
+        except requests.RequestException as exc:
+            raise GroqError(f"No pude hablar con Groq: {exc}") from exc
+
+        # NUEVO: si el modelo rechaza uno de los parámetros de velocidad
+        # (reasoning_effort, reasoning_format, max_completion_tokens), lo
+        # quitamos y reintentamos en vez de dar la conversación por perdida.
+        if resp.status_code == 400 and groq_tuning is not None and intentos_param < 3:
+            try:
+                cuerpo400 = resp.text[:500]
+            except Exception:
+                cuerpo400 = ""
+            retirado = groq_tuning.soltar_parametro_no_soportado(payload, cuerpo400)
+            if retirado:
+                intentos_param += 1
+                print(f"[ia] «{payload.get('model', '?')}» no acepta {retirado}; reintento sin él.")
+                continue
+        break
 
     if resp.status_code >= 400:
         mensaje, code = _mensaje_de_respuesta(resp)

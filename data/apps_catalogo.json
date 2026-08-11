@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": 1785779933.8957894,
+  "updated_at": 1786065138.0370271,
   "apps": [
     {
       "name": "Access",
@@ -439,7 +439,7 @@
     },
     {
       "name": "Microsoft OneDrive",
-      "target": "C:\\Program Files\\Microsoft OneDrive\\26.129.0706.0003\\OneDriveSetup.exe",
+      "target": "C:\\Program Files\\Microsoft OneDrive\\26.129.0706.0004\\OneDriveSetup.exe",
       "source": "uninstall",
       "key": "microsoft onedrive"
     },
@@ -596,10 +596,10 @@
       "key": "ollama"
     },
     {
-      "name": "Ollama version 0.32.5",
+      "name": "Ollama version 0.32.6",
       "target": "C:\\Users\\villa\\AppData\\Local\\Programs\\Ollama\\unins000.exe",
       "source": "uninstall",
-      "key": "ollama version 0 32 5"
+      "key": "ollama version 0 32 6"
     },
     {
       "name": "On-Screen Keyboard",
@@ -614,13 +614,6 @@
       "args": "",
       "source": "start_menu",
       "key": "onedrive"
-    },
-    {
-      "name": "OneDrive Photos",
-      "target": "C:\\Program Files\\Microsoft OneDrive\\OneDrive.App.exe",
-      "args": "",
-      "source": "start_menu",
-      "key": "onedrive photos"
     },
     {
       "name": "OneNote",
@@ -1151,7 +1144,7 @@
     },
     {
       "name": "WebView2 Runtime de Microsoft Edge",
-      "target": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\150.0.4078.105\\msedgewebview2.exe",
+      "target": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\151.0.4129.59\\msedgewebview2.exe",
       "source": "uninstall",
       "key": "webview2 runtime de microsoft edge"
     },

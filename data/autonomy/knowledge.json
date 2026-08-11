@@ -1,11 +1,11 @@
 {
   "preferences": [],
   "patterns": {
-    "hola": 2,
+    "hola": 6,
     "te": 2,
     "como": 3,
-    "porque": 2,
-    "que": 13,
+    "porque": 3,
+    "que": 19,
     "ponte": 1,
     "porfa": 1,
     "solo": 1,
@@ -32,7 +32,7 @@
     "explicame": 1,
     "explica": 1,
     "mira": 1,
-    "entonces": 1,
+    "entonces": 2,
     "aquí": 1,
     "cuatro": 1,
     "sí": 1,
@@ -46,10 +46,24 @@
     "la": 1,
     "mesitas": 1,
     "ah": 1,
-    "puedes": 2
+    "puedes": 7,
+    "hol": 1,
+    "oye": 1,
+    "perfecto": 1,
+    "confirmar": 1,
+    "detente": 1,
+    "para": 1,
+    "a": 1,
+    "nose": 1,
+    "aunque": 1,
+    "lo": 1,
+    "por": 1,
+    "estoy": 1,
+    "xd": 1,
+    "de": 1
   },
-  "updated": 1786038049.2965963,
+  "updated": 1786247537.7811863,
   "checkin": {
-    "last_ts": 1786037202.254642
+    "last_ts": 1786225991.95765
   }
 }

@@ -1,0 +1,44 @@
+YUE · CONFIGURACION GROQ-ONLY
+============================
+
+Cambios principales
+-------------------
+1. La conversación usa únicamente Groq.
+2. Modelo principal: qwen/qwen3.6-27b.
+3. Modelos de respaldo (si Groq retira el principal):
+   - qwen/qwen3.6-27b
+   - openai/gpt-oss-120b
+   - openai/gpt-oss-20b
+   Nota: "openai/gpt-oss-*" es el ID del modelo servido POR GROQ; no usa la API de OpenAI.
+4. Gemini, Cerebras, OpenRouter, Together, OpenAI Images y BFL ya no tienen claves configuradas.
+5. La visión en nube está desactivada: VISION_PROVIDER=none y VISION_OCR_ONLY=true.
+6. Generación de imágenes quedó en modo local (FLUX_PROVIDER=local).
+
+Claves Groq
+-----------
+Principal:
+  GROQ_API_KEY=...
+
+Credenciales adicionales autorizadas para continuidad operativa:
+  GROQ_API_KEY_2=...
+  GROQ_API_KEY_3=...
+  GROQ_API_KEY_4=...
+
+También puede usarse:
+  GROQ_API_KEYS=claveA,claveB,claveC
+
+El router elimina duplicados automáticamente.
+
+Cuándo cambia de credencial
+---------------------------
+- 401/403: puede probar la siguiente credencial.
+- Error de red: puede probar la siguiente.
+- Error 5xx de Groq: puede probar la siguiente.
+- 404/modelo retirado: cambia de MODELO dentro de Groq.
+- 429/rate limit/cuota: NO cambia de credencial para eludir el límite; devuelve un error y respeta Groq.
+
+Diagnóstico
+-----------
+  python tests/diagnostico_groq_keys.py
+
+El diagnóstico no imprime las claves.

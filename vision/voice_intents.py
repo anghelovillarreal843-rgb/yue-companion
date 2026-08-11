@@ -125,6 +125,36 @@ PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         r"\bque hay (en (mi|la) (habitacion|cuarto|sala))\b",
         r"\bcomo (esta|se ve) (mi |la )?(habitacion|cuarto)\b",
     )),
+    # --- ADITIVO: preguntas directas sobre el estado visual --------------
+    # Antes solo existía "qué ves", que devolvía la descripción de la
+    # habitación. Estas cuatro se contestan del `vision_state` en curso, sin
+    # pasar por el modelo de lenguaje: la respuesta es instantánea y no puede
+    # inventarse nada, porque sale del dato medido.
+    ("cuantas_personas", (
+        r"\bcuanta(s)? persona(s)?\b",
+        r"\bcuanta(s)? gente\b",
+        r"\bcuanto(s)? somos\b",
+        r"\bhay alguien (mas )?(aqui|conmigo|en la sala|en el cuarto)\b",
+        r"\bestoy solo\b",
+    )),
+    ("me_miras", (
+        r"\bme (estas )?(mirando|viendo)\b",
+        r"\bme ves ahora\b",
+        r"\bestas mirando(me)?\b",
+        r"\bpuedes verme ahora\b",
+    )),
+    ("mi_postura", (
+        r"\bestoy (sentado|sentada|parado|parada|de pie|acostado|acostada)\b",
+        r"\bcomo estoy (sentado|parado|de pie)\b",
+        r"\bque postura (tengo|estoy)\b",
+        r"\bcomo estoy sentado\b",
+    )),
+    ("que_objetos", (
+        r"\bque objeto(s)? (ves|hay|tengo|reconoces)\b",
+        r"\bque cosas ves\b",
+        r"\bque tengo (en la mano|aqui|encima)\b",
+        r"\bque hay (en la mesa|sobre la mesa)\b",
+    )),
     ("que_ves", (
         r"\bque ves\b", r"\bque estas viendo\b", r"\bque alcanzas a ver\b",
         r"\bme ves\b", r"\bpuedes verme\b", r"\bque miras\b",
@@ -185,10 +215,14 @@ def is_vision_request(text: str) -> bool:
     }
 
 
-def handle(engine, text: str) -> str | None:
+def handle(engine, text: str, state=None) -> str | None:
     """Ejecuta la intención sobre un `PerceptionEngine`. None si no hay intención.
 
     Devuelve SIEMPRE una frase en español lista para que YUE la diga.
+
+    `state` (ADITIVO, opcional) es el `LiveVisionState` compartido. Si se pasa,
+    las preguntas directas ("¿cuántas personas hay?", "¿me estás mirando?") se
+    contestan del estado que ya se está bombeando, sin pedir otro snapshot.
     """
     intent = detect(text)
     if not intent:
@@ -265,6 +299,63 @@ def handle(engine, text: str) -> str | None:
                     "sujétalo quieto y que le dé luz.")
         nivel = "con buena confianza" if result.confidence >= 0.75 else "aunque no estoy del todo segura"
         return f'Leo esto {nivel}: "{result.text}"'
+
+    # --- ADITIVO: respuestas directas desde el estado vivo ----------------
+    # Se construyen del snapshot ya medido, así que YUE no puede inventarse la
+    # respuesta ni tiene que consultar al modelo de lenguaje para saber algo
+    # que la cámara está viendo en este instante.
+    if name in {"cuantas_personas", "me_miras", "mi_postura", "que_objetos"}:
+        from vision.live_state import LiveVisionState
+        vista = state if state is not None else LiveVisionState()
+        if state is None:
+            vista.update_from_snapshot(engine.snapshot())
+        datos = vista.get()
+
+        if name == "cuantas_personas":
+            n = int(datos.get("personas", {}).get("count", 0))
+            if n == 0:
+                return "Ahora mismo no distingo a nadie frente a la cámara."
+            if n == 1:
+                principal = datos["personas"].get("principal") or {}
+                extra = ""
+                if principal.get("posicion"):
+                    extra = f", {principal['posicion']} del encuadre"
+                return f"Veo a una sola persona{extra}."
+            return f"Cuento {n} personas frente a la cámara."
+
+        if name == "me_miras":
+            mirada = datos.get("mirada", {})
+            if not datos.get("personas", {}).get("hay_persona"):
+                return "Tengo la cámara encendida, pero ahora no te veo en el encuadre."
+            if mirada.get("mira_a_yue"):
+                seg = mirada.get("segundos_mirando", 0.0)
+                if seg >= 2.0:
+                    return f"Sí, te veo mirándome desde hace {seg:.0f} segundos."
+                return "Sí, te estoy viendo y parece que me miras."
+            return "Te veo, pero parece que estás mirando hacia otro lado."
+
+        if name == "mi_postura":
+            postura = datos.get("postura", {})
+            if not postura.get("visible"):
+                return ("No alcanzo a ver tu cuerpo, solo el rostro. "
+                        "Échate un poco atrás si quieres que estime la postura.")
+            frase = f"Diría que estás {postura.get('estado')}"
+            if postura.get("brazos_cruzados"):
+                frase = "Diría que estás con los brazos cruzados"
+            elif postura.get("mano_levantada"):
+                frase += ", con una mano levantada"
+            if postura.get("movimiento_raw") == "moving":
+                frase += ", y te veo moverte"
+            return frase + ". Es una estimación, puedo equivocarme."
+
+        if name == "que_objetos":
+            objetos = [o["etiqueta"] for o in datos.get("objetos", [])]
+            if not objetos:
+                return "Ahora mismo no reconozco ningún objeto claro en el encuadre."
+            unicos = list(dict.fromkeys(objetos))[:6]
+            if len(unicos) == 1:
+                return f"Reconozco {unicos[0]}."
+            return "Reconozco " + ", ".join(unicos[:-1]) + f" y {unicos[-1]}."
 
     # --- descripción -----------------------------------------------------
     if name == "describir_habitacion":

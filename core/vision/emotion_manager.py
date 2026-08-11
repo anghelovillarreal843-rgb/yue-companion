@@ -29,6 +29,28 @@ def _cfg(name: str, default):
     return getattr(config, name, default) if config is not None else default
 
 
+def _umbral_pct(valor, default: float = 60.0) -> float:
+    """Umbral de confianza SIEMPRE en 0..100, venga como venga.
+
+    CORRECCIÓN (fallo silencioso, no reventaba pero rompía el filtro): este
+    módulo compara contra confianzas en PORCENTAJE (DeepFace/emotion_ai dan
+    0..100), pero `VISION_EMOTION_MIN_CONFIDENCE` la comparte con el paquete
+    `vision/`, que la maneja en 0..1. Cuando el .env pasó a 0.45, el viejo
+    `int(0.45)` daba **0**: el umbral desaparecía y YUE reaccionaba a
+    CUALQUIER lectura, por dudosa que fuera.
+
+    Ahora: <= 1 se entiende como fracción (0.45 -> 45%) y > 1 como porcentaje
+    (45 -> 45%). Las dos formas de escribirlo en el .env son válidas.
+    """
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        v = float(default)
+    if v <= 1.0:
+        v = v * 100.0
+    return max(0.0, min(100.0, v))
+
+
 @dataclass(frozen=True)
 class Reaction:
     text: str
@@ -79,7 +101,12 @@ class EmotionManager:
         if self.persona not in _LINES:
             self.persona = "YUE"
         self.max_per_hour = int(_cfg("MAX_EMOTION_RESPONSES_PER_HOUR", 4))
-        self.min_confidence = int(_cfg("VISION_EMOTION_MIN_CONFIDENCE", 60))
+        # Prefiere la lectura ya normalizada de config (0..100); si no existe
+        # (config antiguo o sin config), normaliza la genérica a mano.
+        self.min_confidence = _umbral_pct(
+            _cfg("VISION_EMOTION_MIN_CONFIDENCE_PCT",
+                 _cfg("VISION_EMOTION_MIN_CONFIDENCE", 60))
+        )
         self.cooldown = float(_cfg("VISION_EMOTION_COOLDOWN", 120.0))
 
         self._spoken: deque[float] = deque()   # timestamps de reacciones habladas

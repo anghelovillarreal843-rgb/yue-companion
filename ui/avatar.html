@@ -222,6 +222,16 @@ const GESTOS = {
   desanimo:   { dur: 2.2,  fn: (u) => ({ headX: sostiene(u, 0.35) * 0.10,
                                          hombros: -sostiene(u, 0.35) * 0.09,
                                          chestX: sostiene(u, 0.35) * 0.045 }) },
+  // NUEVO (lo pide la percepcion visual: "si detecta saludo, levanta la mano").
+  // Es el unico gesto que mueve un BRAZO. Se puede porque va solo por el canal
+  // brazoDer, que sube el brazo por el LATERAL: no cruza el torso, asi que sin
+  // IK tampoco atraviesa el cuerpo. El saludito lo da brazoDerAgita, que oscila
+  // mientras el brazo esta arriba y vale 0 en u=0 y u=1 como todos los demas.
+  saludar:    { dur: 2.0,  fn: (u) => ({ brazoDer: sostiene(u, 0.26) * 1.05,
+                                         brazoDerAgita: sostiene(u, 0.26) * Math.sin(u * Math.PI * 6) * 0.20,
+                                         hombros: sostiene(u, 0.26) * 0.06,
+                                         headZ: sostiene(u, 0.26) * 0.05,
+                                         headX: -sostiene(u, 0.26) * 0.02 }) },
 };
 
 // Topes por canal: el seguro contra trabarse aunque se junten varios gestos.
@@ -229,6 +239,9 @@ const TOPES = {
   headX: 0.22, headY: 0.28, headZ: 0.22,
   chestX: 0.10, hombros: 0.20,
   cuerpoY: 0.035, cuerpoRotX: 0.075,
+  // El brazo necesita recorrido de verdad (baja ~1.48 rad en reposo), por eso
+  // su tope es mucho mayor que el del resto de canales.
+  brazoDer: 1.20, brazoDerAgita: 0.30,
 };
 
 let gestos = [];
@@ -252,7 +265,8 @@ function playGesture(nombre, opciones) {
 }
 
 function sampleGestures(dt) {
-  const salida = { headX: 0, headY: 0, headZ: 0, chestX: 0, hombros: 0, cuerpoY: 0, cuerpoRotX: 0 };
+  const salida = { headX: 0, headY: 0, headZ: 0, chestX: 0, hombros: 0, cuerpoY: 0, cuerpoRotX: 0,
+                   brazoDer: 0, brazoDerAgita: 0 };
   if (!gestos.length) return salida;
   const vivos = [];
   for (const g of gestos) {
@@ -509,15 +523,25 @@ function applyArmPose(dt=0.016, p=EMOTION_PROFILES.neutral, t=0, g=null) {
     bones.lUp.rotation.y = damp(bones.lUp.rotation.y, lively * Math.sin(t * p.speed) + armWave * 0.20, 9, dt);
     bones.lUp.rotation.z = damp(bones.lUp.rotation.z, -ARM_DOWN + lively + shoulder + armWave, 11, dt);
   }
+  // NUEVO: canal de saludo. Resta de ARM_DOWN, o sea SUBE el brazo derecho por
+  // el lateral hasta cerca de la horizontal. Como es un delta de gesto, al
+  // terminar vale 0 y el brazo vuelve solo a su sitio: no hay estado que
+  // limpiar ni forma de dejarlo trabado arriba.
+  const brazoDer = (g && g.brazoDer) || 0;
+  const brazoAgita = (g && g.brazoDerAgita) || 0;
   if (bones.rUp) {
     bones.rUp.rotation.x = damp(bones.rUp.rotation.x, -ARM_FWD + shoulderPulse - armWave * 0.45, 11, dt);
     bones.rUp.rotation.y = damp(bones.rUp.rotation.y, -lively * Math.sin(t * p.speed) - armWave * 0.20, 9, dt);
-    bones.rUp.rotation.z = damp(bones.rUp.rotation.z, ARM_DOWN - lively - shoulder + armWave, 11, dt);
+    bones.rUp.rotation.z = damp(bones.rUp.rotation.z,
+      ARM_DOWN - lively - shoulder + armWave - brazoDer, 11, dt);
   }
   if (bones.lShoulder) bones.lShoulder.rotation.z = damp(bones.lShoulder.rotation.z, shoulder * 0.45, 9, dt);
-  if (bones.rShoulder) bones.rShoulder.rotation.z = damp(bones.rShoulder.rotation.z, -shoulder * 0.45, 9, dt);
+  if (bones.rShoulder) bones.rShoulder.rotation.z = damp(bones.rShoulder.rotation.z, -shoulder * 0.45 - brazoDer * 0.12, 9, dt);
   if (bones.lLow) bones.lLow.rotation.z = damp(bones.lLow.rotation.z, -ARM_IN - armWave * 0.18, 11, dt);
-  if (bones.rLow) bones.rLow.rotation.z = damp(bones.rLow.rotation.z, ARM_IN + armWave * 0.18, 11, dt);
+  // El antebrazo derecho es el que agita: sin esto el saludo seria un brazo
+  // levantado y rigido, que se lee como "alto" y no como "hola".
+  if (bones.rLow) bones.rLow.rotation.z = damp(bones.rLow.rotation.z,
+    ARM_IN + armWave * 0.18 - brazoDer * 0.55 + brazoAgita, 14, dt);
 }
 
 function animate() {

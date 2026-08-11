@@ -126,6 +126,13 @@ class PerceptionEngine:
         self._last_pose_landmarks: list = []
         self._last_pose_state = ""
         self._last_movement = ""
+        # ADITIVO: postura serializable para el snapshot y marca del último OCR
+        # automático (para no releer el mismo documento en bucle).
+        self._last_pose_state_dict: dict = {
+            "visible": False, "state": "unknown", "left_arm_raised": False,
+            "right_arm_raised": False, "movement": "still",
+        }
+        self._last_auto_ocr = 0.0
         self._last_scene_hint = ("", 0.0)
         self._last_ocr: OCRResult | None = None
         self._last_stable_text = None
@@ -312,7 +319,15 @@ class PerceptionEngine:
                 pose_state=self._last_pose_state,
                 movement=self._last_movement,
             )
-            if estimate.affective_state != "undetermined" and estimate.confidence >= 0.55:
+            # CORRECCIÓN: el umbral estaba fijo en 0.55, ignorando
+            # `emotion_min_confidence`. Con la configuración del proyecto ese
+            # ajuste valía 60.0 (venía en porcentaje), así que aunque se
+            # respetara nunca se cumplía. Ahora se usa el valor ya normalizado
+            # por `settings.get_confidence`, con un suelo prudente.
+            umbral_emocion = max(0.35, float(
+                getattr(self.cfg, "emotion_min_confidence", 0.45)))
+            if (estimate.affective_state != "undetermined"
+                    and estimate.confidence >= umbral_emocion):
                 self.events.observe(
                     "affective_estimate", estimate.affective_state, estimate.confidence,
                     source="emotion_analyzer",
@@ -335,6 +350,11 @@ class PerceptionEngine:
             self._last_pose_landmarks = list(getattr(pose, "landmarks", []) or [])
             self._last_pose_state = getattr(pose, "state", "")
             self._last_movement = getattr(pose, "movement", "")
+            # ADITIVO: la observación completa, para poder publicarla en el
+            # snapshot. Antes la postura se calculaba y se quedaba dentro del
+            # motor: `snapshot()` no la incluía, así que ni el contexto del
+            # modelo ni el avatar podían enterarse de si estabas sentado.
+            self._last_pose_state_dict = pose.as_state()
 
     def _job_hands(self) -> None:
         if not self.privacy.allows("hands"):
@@ -437,18 +457,44 @@ class PerceptionEngine:
                 self._last_actions = events
 
     def _job_text_watch(self) -> None:
-        """Vigila si APARECE texto delante de la cámara; no lee sin permiso."""
+        """Vigila si APARECE texto delante de la cámara; no lee sin permiso.
+
+        Punto 8 del pedido: el OCR NO corre en bucle. Solo se dispara cuando
+        (a) el usuario lo pide, o (b) aparece un DOCUMENTO claro frente a la
+        cámara: región de texto grande, bien puntuada y sostenida. Ese segundo
+        caso estaba descrito pero no implementado: antes solo se avisaba de que
+        «hay texto» y ahí se quedaba.
+        """
         if not self.privacy.allows("ocr"):
             return
         if getattr(self.cfg, "ocr_only_on_request", True) and not self.privacy.request_open():
-            # Solo avisa de que hay algo legible, sin leerlo.
             frame = self.camera.latest_bgr()
             if frame is None:
                 return
             regions = self.text_detector.detect(frame)
-            if regions and regions[0].score > 0.4:
-                self.events.observe("text_visible", "hay_texto", regions[0].score,
+            if not regions:
+                return
+            mejor = regions[0]
+            if mejor.score > 0.4:
+                self.events.observe("text_visible", "hay_texto", mejor.score,
                                     source="text_detector", min_duration=1.0, cooldown=30.0)
+            # --- (b) documento evidente: se lee UNA vez, con enfriamiento ---
+            if not getattr(self.cfg, "ocr_auto_on_document", True):
+                return
+            umbral = float(getattr(self.cfg, "ocr_document_min_score", 0.55))
+            es_documento = (
+                mejor.score >= umbral
+                and mejor.area() >= 0.08          # ocupa buena parte del encuadre
+                and getattr(mejor, "lines", 1) >= 2   # varias líneas, no un logo
+            )
+            if not es_documento:
+                return
+            ahora = time.time()
+            if ahora - self._last_auto_ocr < 20.0:
+                return
+            self._last_auto_ocr = ahora
+            log.info("Documento detectado frente a la cámara; leo el texto.")
+            self.read_text(auto=True)
             return
         self.read_text(auto=True)
 
@@ -641,6 +687,7 @@ class PerceptionEngine:
             room = dict(self._room_snapshot)
             stable = self._last_stable_text
             actions = list(self._last_actions)
+            pose_state = dict(self._last_pose_state_dict)
         status = self.camera.status()
         att = self.attention.state()
         return {
@@ -652,6 +699,10 @@ class PerceptionEngine:
             },
             "presence": self.people.as_state(),
             "attention": att.as_dict(),
+            # ADITIVO: la postura ya viajaba por dentro del motor pero no salía
+            # en el snapshot; sin ella `vision_state["postura"]` era siempre
+            # "desconocida" y el punto 6 del pedido no se podía cumplir.
+            "pose": pose_state,
             "hands": self.hands.as_state(),
             "objects": self.objects.as_state(),
             "room": room,

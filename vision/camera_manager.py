@@ -272,19 +272,54 @@ class CameraManager:
             pass
 
     def tick_fps(self) -> float:
-        """Actualiza y devuelve los FPS reales de captura."""
+        """Actualiza y devuelve los FPS reales de CAPTURA.
+
+        CORRECCIÓN (fallo silencioso, y de los que engañan): esto solo lo
+        llamaba `PerceptionEngine._job_face`. O sea, los FPS reales medían la
+        cadencia del DETECTOR DE ROSTROS, no la de la cámara, y si ese módulo
+        estaba apagado (o aún cargando su modelo) `real_fps` se quedaba en 0.0
+        para siempre. Un 0 ahí es peligroso porque es justo el síntoma de "la
+        cámara no entrega nada", así que llevaba a diagnosticar un problema de
+        webcam que no existía.
+
+        Ahora se mide contra el contador de fotogramas del `FrameHub`, que lo
+        incrementa el hilo de captura. Es independiente de qué detectores estén
+        registrados y de a qué ritmo vayan, que es lo que un FPS de captura
+        tiene que significar. Se sigue pudiendo llamar desde cualquier sitio y
+        tantas veces como se quiera: ya no cuenta llamadas, cuenta fotogramas.
+        """
         now = time.monotonic()
-        self._frames_seen += 1
+        try:
+            frame_id = int(self.hub.frame_id())
+        except Exception:
+            return self._status.real_fps
+
+        if self._last_frame_id < 0 or self._fps_t0 <= 0.0:
+            self._last_frame_id = frame_id
+            self._fps_t0 = now
+            return self._status.real_fps
+
         elapsed = now - self._fps_t0
         if elapsed >= 1.0:
-            self._status.real_fps = self._frames_seen / elapsed
-            self._frames_seen = 0
+            nuevos = max(0, frame_id - self._last_frame_id)
+            self._status.real_fps = nuevos / elapsed
+            self._last_frame_id = frame_id
             self._fps_t0 = now
         return self._status.real_fps
 
     def status(self) -> CameraStatus:
+        # Se refresca aquí para que el dato sea correcto lo consulte quien lo
+        # consulte, sin depender de que algún detector se acuerde de llamar a
+        # tick_fps(). `status()` se pide varias veces por segundo desde la capa
+        # reactiva, así que el muestreo de 1 s siempre se cumple.
         self._status.active = self.is_running()
         self._status.owner = camera_owner(self._status.index) or ""
+        if self._status.active:
+            self.tick_fps()
+        else:
+            self._status.real_fps = 0.0
+            self._last_frame_id = -1
+            self._fps_t0 = 0.0
         return self._status
 
     def available_cameras(self) -> list[int]:

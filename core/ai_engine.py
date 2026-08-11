@@ -13,10 +13,8 @@ class AIEngine:
         self.vision_model = config.GROQ_VISION_MODEL
         self.api_key = config.GROQ_API_KEY
         self.temperature = config.TEMPERATURE
-        # NUEVO: router de varias IAs con relevo automático. Si hay más de un
-        # proveedor con clave en el .env (Groq, Gemini, Cerebras, OpenRouter…),
-        # el chat prueba la fila y salta al siguiente sin pausa cuando uno falla.
-        # Va protegido: si algo del router fallara, YUE sigue con Groq como antes.
+        # Router Groq-only. Permite varias credenciales autorizadas para relevo
+        # operativo, sin cambiar de proveedor. Los 429 no rotan de clave.
         self._router = None
         try:
             from core import ai_router
@@ -32,62 +30,162 @@ class AIEngine:
         }
 
     def chat(self, messages, timeout=60, model=None):
-        """messages: lista [{'role','content'}]. Devuelve el texto de Yue.
-        model: opcional, para usar otro modelo (p. ej. el de vision)."""
-        # NUEVO: si hay varios proveedores con clave, probamos la fila con relevo
-        # automático. Si ninguno responde (o no hay router), seguimos con el
-        # camino Groq de siempre, así nunca hay regresión.
-        if self._router is not None and model is None:
+        """Conversación de Yue usando exclusivamente Groq.
+
+        Para chat normal usa el pool de claves configurado. Un 429/rate-limit se
+        respeta y NO se intenta con otra clave. Si una credencial fue revocada,
+        carece de permisos o hay un fallo de red/5xx, puede probar la siguiente.
+        """
+        if model is None and self._router is not None:
             try:
                 disponibles = self._router.available()
             except Exception:
                 disponibles = []
-            # Solo tiene sentido usar el router si hay 2+ proveedores en fila; con
-            # uno solo, el camino Groq de abajo ya hace lo mismo (y su reintento).
-            if len(disponibles) >= 2:
+            if disponibles:
                 try:
                     salida = self._router.chat(
                         messages, timeout=timeout, temperature=self.temperature)
-                    texto = (salida.get("text") or "").strip()
+                    texto = self._depurar(salida.get("text") or "")
+                    # NUEVO: si aun así contestó en inglés, se pide UNA vez más
+                    # con la orden de idioma delante. Si vuelve a fallar, se
+                    # devuelve lo que haya (nunca deja a YUE muda).
+                    if texto and bool(getattr(config, "FORZAR_ESPANOL", True)):
+                        try:
+                            from core import text_sanitizer
+                            if text_sanitizer.parece_ingles(texto):
+                                print("[ia] la respuesta salió en inglés; la pido en español.")
+                                en_espanol = self._reintento_en_espanol(messages, timeout)
+                                texto = en_espanol or texto
+                        except Exception:
+                            pass
                     if texto:
                         return texto
-                except Exception:
-                    pass  # cae al camino Groq de siempre
+                except self._ai_router_mod.AllProvidersFailed as exc:
+                    detalle = " ".join(str(v) for v in exc.errores.values()).lower()
+                    if "model_gone" in detalle:
+                        # El modelo fue retirado: resuelve uno vigente con la
+                        # primera clave válida y reintenta la fila una sola vez.
+                        key = next(iter(getattr(config, "GROQ_API_KEYS", ())), self.api_key)
+                        ai_fallback.olvidar("text")
+                        vivo = ai_fallback.resolve_model(
+                            self.base, key, self.model, "text",
+                            extras=tuple(config.GROQ_MODEL_FALLBACKS),
+                        )
+                        if vivo and vivo != self.model:
+                            self.model = vivo
+                            self._router.set_model(vivo)
+                            salida = self._router.chat(
+                                messages, timeout=timeout, temperature=self.temperature)
+                            texto = self._depurar(salida.get("text") or "")
+                            if texto:
+                                return texto
+                    if "quota" in detalle or "límite" in detalle or "429" in detalle:
+                        raise RuntimeError(
+                            "Groq alcanzó su límite/cuota. Yue respetará el límite y "
+                            "volverá a funcionar cuando Groq permita nuevas solicitudes."
+                        ) from exc
+                    raise RuntimeError(str(exc)) from exc
 
+        # Compatibilidad para llamadas que fuerzan un modelo concreto.
         if not self.api_key:
             raise RuntimeError("Falta GROQ_API_KEY en el archivo .env")
-
-        url = f"{self.base}/chat/completions"
         payload = {
             "model": model or self.model,
             "messages": messages,
             "temperature": self.temperature,
         }
+        # NUEVO: mismos ajustes de velocidad que en el router (sin razonamiento
+        # visible y con tope de tokens). Ver core/groq_tuning.py.
+        try:
+            from core import groq_tuning
+            groq_tuning.aplicar_ajustes(payload)
+        except Exception:
+            pass
         try:
             data = ai_fallback.post_chat(self.base, self.api_key, payload, timeout)
         except ModelGoneError:
-            # El modelo del .env fue retirado por Groq: buscamos uno vivo y
-            # reintentamos una sola vez.
             ai_fallback.olvidar("text")
             vivo = ai_fallback.resolve_model(
                 self.base, self.api_key, payload["model"], "text",
                 extras=tuple(config.GROQ_MODEL_FALLBACKS),
             )
-            if vivo == payload["model"]:
+            if vivo == payload["model"] or not vivo:
                 raise
             payload["model"] = vivo
             self.model = vivo
             data = ai_fallback.post_chat(self.base, self.api_key, payload, timeout)
-        # Formato OpenAI/Groq: {"choices": [{"message": {"content": "..."}}]}
         text = (data["choices"][0]["message"]["content"] or "").strip()
-        return text or "...(me quede sin palabras, no me malinterpretes)"
+        text = self._depurar(text)
+        return text or "...(me quedé sin palabras, no me malinterpretes)"
+
+    # ------------------------------------------------------------------
+    # LIMPIEZA DE LA RESPUESTA  [ADITIVO]
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _depurar(texto: str) -> str:
+        """Quita el monólogo interno del modelo (<think>…</think> y similares).
+
+        Es la causa de que YUE soltara párrafos en inglés: los modelos de
+        razonamiento escriben su análisis dentro del contenido y nadie lo
+        recortaba, así que la voz lo leía tal cual.
+        """
+        try:
+            from core import text_sanitizer
+            return text_sanitizer.limpiar(texto)
+        except Exception:
+            return (texto or "").strip()
+
+    def _reintento_en_espanol(self, messages, timeout):
+        """Segunda (y última) oportunidad cuando la respuesta salió en inglés.
+
+        Repite la misma petición añadiendo una orden tajante de idioma. Solo se
+        dispara si de verdad parecía inglés, así que en el uso normal no añade
+        ni una milésima de espera.
+        """
+        refuerzo = list(messages) + [{
+            "role": "system",
+            "content": (
+                "IDIOMA OBLIGATORIO: responde ÚNICAMENTE en español de España/"
+                "Latinoamérica. No escribas ni una palabra en inglés, no muestres "
+                "tu razonamiento ni etiquetas como <think>. Solo la respuesta "
+                "hablada de YUE, corta y natural."
+            ),
+        }]
+        try:
+            salida = self._router.chat(
+                refuerzo, timeout=timeout, temperature=self.temperature)
+            return self._depurar((salida.get("text") or ""))
+        except Exception as exc:
+            print("[ia] el reintento en español tampoco salió:", exc)
+            return ""
 
     def look(self, system, image_b64, instruction, timeout=60):
-        """Manda una captura de pantalla al modelo con visión y devuelve el comentario."""
+        """Manda una IMAGEN al modelo con visión y devuelve el comentario.
+
+        AMPLIADO: primero se prueba el VisionRouter (varios proveedores
+        multimodales en fila, con relevo automático). Si el router no está
+        disponible o falla entero, se usa el camino de UN endpoint de siempre,
+        así nunca hay regresión con lo que ya funcionaba.
+        """
+        # --- 1) Camino nuevo: fila de proveedores visuales ---------------
+        router = self._vision_router()
+        if router is not None:
+            try:
+                salida = router.describe(
+                    image_b64, instruction, system=system, timeout=timeout,
+                    temperature=float(getattr(config, "SCREEN_VISION_TEMPERATURE", 0.2)),
+                    max_tokens=int(getattr(config, "SCREEN_VISION_MAX_TOKENS", 420)),
+                )
+                texto = self._depurar(salida.get("text") or "")
+                if texto:
+                    return texto
+            except Exception as exc:
+                print(f"[VISION] la fila visual no respondió ({exc}); pruebo el endpoint único.")
+
+        # --- 2) Camino de siempre: un solo endpoint -----------------------
         if not self.api_key:
             raise RuntimeError("Falta GROQ_API_KEY en el archivo .env")
 
-        url = f"{self.base}/chat/completions"
         content = [
             {"type": "text", "text": instruction},
             {"type": "image_url",
@@ -96,9 +194,8 @@ class AIEngine:
         v_base, v_key, v_model = self._vision_endpoint()
         if not v_base or not v_key:
             raise GroqError(
-                "No hay proveedor de visión con clave. En el .env configura "
-                "VISION_PROVIDER (groq/together/openai), VISION_API_KEY y VISION_BASE_URL "
-                "de tu proveedor de visión."
+                "La visión multimodal en la nube está desactivada. Yue mantiene OCR y "
+                "percepción local; usa VISION_OCR_ONLY=true para leer texto de pantalla."
             )
         payload = {
             "model": v_model,
@@ -116,9 +213,8 @@ class AIEngine:
         while True:
             if not payload["model"]:
                 raise GroqError(
-                    "Tu cuenta de Groq no tiene ahora mismo un modelo con visión. "
-                    "Configura otro proveedor de visión en el .env: VISION_PROVIDER=together "
-                    "y TOGETHER_API_KEY=tu_clave (o VISION_PROVIDER=openai con OPENAI_API_KEY)."
+                    "Groq no tiene un modelo de visión configurado para este proyecto. "
+                    "La alternativa sin otras APIs es VISION_OCR_ONLY=true."
                 )
             try:
                 data = ai_fallback.post_chat(v_base, v_key, payload, timeout)
@@ -135,7 +231,7 @@ class AIEngine:
                         "que VISION_API_KEY tenga acceso a ese modelo."
                     )
                 payload["model"] = nuevo
-        return (data["choices"][0]["message"]["content"] or "").strip()
+        return self._depurar(data["choices"][0]["message"]["content"] or "")
 
     def look_ocr(self, system, instruction, timeout=45, max_chars=6000):
         """Visión SIN modelo multimodal: lee el TEXTO de la pantalla por OCR y deja
@@ -144,39 +240,37 @@ class AIEngine:
         Ideal cuando no hay clave de visión válida: sirve para PDFs, documentos,
         páginas web y cualquier pantalla con texto. No describe fotos ni imágenes
         sin texto (para eso hace falta el modelo multimodal).
+
+        AMPLIADO: ahora usa `core/screen_ocr.py`, que encadena pytesseract con la
+        cadena PaddleOCR -> EasyOCR -> Tesseract del paquete `vision/`. Antes solo
+        sabía usar pytesseract y, sin el binario de Tesseract instalado, daba
+        "OCR no disponible" aunque la máquina tuviera EasyOCR.
         """
-        from core import screen_text
-        # 1) ¿Hay motor OCR listo? Si no, mensaje claro (falta Tesseract).
-        try:
-            motor = screen_text.get_engine()
-            disponible = motor.available()
-        except Exception as exc:
-            disponible = False
-            print("[ocr] no pude inicializar el motor:", exc)
-        if not disponible:
+        from core import screen_ocr
+        # 1) ¿Hay ALGÚN motor OCR listo? Si no, mensaje claro.
+        if not screen_ocr.available():
             raise RuntimeError(
-                "OCR no disponible: falta Tesseract-OCR. Instálalo con "
-                "'winget install UB-Mannheim.TesseractOCR' (o desde su web) y, si no "
-                "queda en el PATH, pon la ruta a tesseract.exe en OCR_TESSERACT_CMD del .env."
+                "OCR no disponible: no hay ningún motor instalado. Instala uno de "
+                "estos: Tesseract-OCR ('winget install UB-Mannheim.TesseractOCR'; si "
+                "no queda en el PATH, pon la ruta a tesseract.exe en OCR_TESSERACT_CMD "
+                "del .env), o 'pip install easyocr', o 'pip install paddleocr'."
             )
-        # 2) Captura robusta con el MISMO método que ya funciona (mss -> PIL), en vez
-        #    de pyautogui (que puede no estar instalado).
+        # 2) Captura robusta con el MISMO método que ya funciona (mss -> PIL).
         imagen = None
         try:
             from core import screen_capture as vision
-            imagen = vision._grab()
+            imagen = vision.grab_frame().image
         except Exception as exc:
             print("[ocr] captura mss/PIL falló, intento el método propio del OCR:", exc)
-        # 3) OCR sobre la imagen capturada (si no hubo imagen, read_screen captura solo).
-        try:
-            texto = (screen_text.read_screen(image=imagen) or "").strip()
-        except Exception as exc:
-            raise RuntimeError(f"OCR: no pude leer la pantalla: {exc}") from exc
+        # 3) OCR sobre la imagen capturada.
+        lectura = screen_ocr.read(imagen, max_chars=max_chars)
+        texto = (lectura.get("text") or "").strip()
         if not texto:
             raise RuntimeError(
                 "OCR sin texto: no encontré texto legible en la pantalla ahora mismo. "
                 "Abre en primer plano lo que quieres que lea (un PDF, documento o página)."
             )
+        print(f"[VISION] OCR chars: {len(texto)} (motor {lectura.get('engine', '?')})")
         user = (
             f"{instruction}\n\n"
             "A continuación va el TEXTO que hay ahora mismo en la pantalla del "
@@ -190,23 +284,96 @@ class AIEngine:
         ]
         return self.chat(messages, timeout=timeout)
 
+    # ------------------------------------------------------------------
+    # VISIÓN DE PANTALLA (camino nuevo, con router propio)  [ADITIVO]
+    # ------------------------------------------------------------------
+    def _vision_router(self):
+        """Router de VISIÓN (solo modelos multimodales). None si está apagado."""
+        cacheado = getattr(self, "_vrouter", None)
+        if cacheado is not None:
+            return cacheado or None
+        proveedor = str(getattr(config, "VISION_PROVIDER", "auto") or "auto").lower()
+        if proveedor == "none" or bool(getattr(config, "VISION_OCR_ONLY", False)):
+            self._vrouter = False          # apagado A PROPÓSITO, sin ambigüedad
+            return None
+        try:
+            from core import vision_router
+            self._vrouter = vision_router.build_default_vision_router()
+        except Exception as exc:
+            print(f"[VISION] no pude construir el VisionRouter: {exc}")
+            self._vrouter = False
+        return self._vrouter or None
+
+    def vision_router_report(self) -> list:
+        """Estado de la fila visual (sin exponer claves). Para /diagvision."""
+        router = self._vision_router()
+        if router is None:
+            return []
+        try:
+            return router.report()
+        except Exception:
+            return []
+
+    def look_screen(self, question: str = "", system: str = "", monitor=None,
+                    force_fresh: bool = False, timeout: int = None):
+        """MIRA la pantalla de verdad y devuelve una `ScreenObservation`.
+
+        Este es el camino recomendado: captura validada -> clasificación del
+        contenido -> OCR y/o modelo multimodal con relevo -> fallback a OCR.
+        No lanza excepción: la observación trae los errores dentro.
+        """
+        from core.screen_analyzer import get_analyzer
+        analizador = get_analyzer(ai_engine=self)
+        return analizador.observe(
+            question=question, monitor=monitor, force_fresh=force_fresh,
+            timeout=int(timeout or getattr(config, "SCREEN_VISION_TIMEOUT", 45)),
+        )
+
+    def answer_from_observation(self, observation, system: str, question: str = "",
+                                timeout: int = 45) -> str:
+        """Convierte una ScreenObservation en la respuesta hablada de YUE.
+
+        Si hubo descripción visual, se apoya en ella; si solo hubo OCR, responde
+        igualmente con el router de TEXTO. Así YUE nunca dice "no puedo ver"
+        cuando al menos pudo leer algo.
+        """
+        if observation is None:
+            return ""
+        if not observation:
+            # Ni visión ni texto: mensaje honesto y accionable.
+            motivos = " | ".join(str(e)[:140] for e in (observation.errors or []))
+            print(f"[VISION] observación vacía: {motivos or 'sin detalle'}")
+            return ""
+
+        peticion = question or "Cuéntame qué estoy viendo en la pantalla."
+        user = (
+            "Esto es lo que acabas de observar en la pantalla del usuario. "
+            "Responde en español, breve y útil, basándote SOLO en esta "
+            "observación. No inventes nada que no aparezca aquí. Si algo no se "
+            "pudo determinar, dilo con naturalidad.\n\n"
+            f"{observation.to_prompt_context()}\n\n"
+            f"Petición del usuario: {peticion}"
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        return self.chat(messages, timeout=timeout)
+
     def _vision_endpoint(self, forzar: bool = False):
         """(base, key, modelo) para las llamadas con imagen.
 
-        Respeta VISION_PROVIDER del .env: la visión puede vivir en Together u
-        OpenAI aunque el chat siga en Groq. La resolución/corrección automática
-        del modelo se aplica a CUALQUIER proveedor (consultando su lista /models).
+        Este proyecto está configurado sin proveedores visuales externos.
+        Si VISION_PROVIDER=none o VISION_OCR_ONLY=true devuelve vacío y el
+        analizador usa OCR/percepción local.
         """
+        if str(getattr(config, "VISION_PROVIDER", "none")).lower() == "none" \
+                or bool(getattr(config, "VISION_OCR_ONLY", False)):
+            return ("", "", "")
         try:
             v_base, v_key, v_model = config.vision_endpoint()
         except Exception:
-            v_base, v_key, v_model = self.base, self.api_key, self.vision_model
-        # Si la configuración de visión no da credenciales (p. ej. VISION_PROVIDER
-        # vacío/none o sin clave propia), reutilizamos las del chat, que SÍ funcionan.
-        if (not v_base or not v_key) and self.api_key:
-            v_base = self.base
-            v_key = self.api_key
-            v_model = v_model or self.vision_model or config.GROQ_VISION_MODEL
+            return ("", "", "")
         if not v_base or not v_key:
             return ("", "", "")
         # Resolución automática del modelo para cualquier proveedor: consulta su
@@ -244,15 +411,33 @@ class AIEngine:
 
     def preflight_vision(self) -> dict:
         """Valida el PROVEEDOR y la CLAVE de visión al arrancar, sin gastar tokens
-        ni capturar pantalla. Sirve para avisar claro cuando el 401 de Together/Groq
-        dejaría la visión muerta en silencio.
+        ni capturar pantalla. En la configuración actual confirma si la visión
+        multimodal está desactivada y deja OCR como alternativa local.
 
         Devuelve un dict con: ok, provider, host, model, reason, detail.
         """
-        prov = getattr(config, "VISION_PROVIDER", "groq")
+        prov = getattr(config, "VISION_PROVIDER", "auto")
         if prov == "none":
             return {"ok": False, "provider": "none", "reason": "disabled",
-                    "detail": "VISION_PROVIDER=none (visión desactivada a propósito)"}
+                    "detail": "VISION_PROVIDER=none (visión multimodal desactivada a "
+                              "propósito; YUE sigue mirando la pantalla por OCR)"}
+        # NUEVO: con el VisionRouter, "hay visión" ya no depende de un endpoint
+        # único. Si al menos un proveedor multimodal tiene clave, la visión está
+        # viva aunque el primero de la fila esté caído.
+        router = self._vision_router()
+        if router is not None:
+            try:
+                disponibles = router.available()
+            except Exception:
+                disponibles = []
+            if disponibles:
+                nombres = ", ".join(f"{p.name}/{p.model}" for p in disponibles[:4])
+                return {
+                    "ok": True, "provider": prov, "status": 200,
+                    "host": "VisionRouter",
+                    "model": nombres,
+                    "detail": f"{len(disponibles)} proveedor(es) multimodal(es) en fila",
+                }
         # Usamos el endpoint declarado en el .env (sin resolver modelo por red, para
         # no disparar una segunda llamada ni el mensaje confuso de /models).
         try:
@@ -283,6 +468,16 @@ class AIEngine:
 
     def hay_vision(self) -> bool:
         """¿Hay de verdad un proveedor con visión utilizable ahora mismo?"""
+        # 1) La fila visual manda: si algún proveedor multimodal está disponible,
+        #    hay visión aunque Groq se haya quedado sin modelos con imagen.
+        router = self._vision_router()
+        if router is not None:
+            try:
+                if router.hay_vision():
+                    return True
+            except Exception:
+                pass
+        # 2) Camino antiguo (un solo endpoint), por compatibilidad.
         v_base, v_key, v_model = self._vision_endpoint()
         if not v_base or not v_key or not v_model:
             return False

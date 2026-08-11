@@ -193,6 +193,8 @@ class DesktopPet(QWidget):
         "asentir", "negar", "ladear", "sobresalto", "encoger", "suspiro",
         "reir", "asomarse", "retroceder", "mirar_lejos", "estirarse",
         "celebrar", "pensar", "desanimo",
+        # NUEVO: lo usa la percepción visual cuando te ve saludar con la mano.
+        "saludar",
     )
 
     def play_gesture(self, nombre: str, gain: float = 1.0):

@@ -84,6 +84,16 @@ def clean_response(text: str) -> str:
     if not value:
         return value
 
+    # NUEVO (red de seguridad): aunque el motor ya lo recorta, aquí se vuelve a
+    # quitar el monólogo interno del modelo (<think>...</think>, canales de
+    # gpt-oss, "Thinking: ..."). Es el último punto antes de que YUE HABLE, así
+    # que si alguna ruta se saltara la limpieza, la voz no lo leería igual.
+    try:
+        from core import text_sanitizer
+        value = text_sanitizer.quitar_razonamiento(value) or value
+    except Exception:
+        pass
+
     _INT = r"(?:muy\s+|un\s+poco\s+|algo\s+|tan\s+|bastante\s+|super\s+)?"
 
     # --- 1) Etiqueta inicial típica de modelos: [feliz], (curiosa), Emoción: triste.
@@ -217,3 +227,83 @@ def infer_conversation_state(user_text: str, assistant_text: str) -> EmotionStat
 
 def infer_emotion(text: str) -> str:
     return infer_emotion_state(text).name
+
+
+# ===========================================================================
+# PUENTE hacia la arquitectura nueva (core.affect + core.support)
+# ===========================================================================
+# Este módulo se conserva ENTERO y funcionando: `clean_response()` sigue siendo
+# la limpieza canónica del texto de YUE (nada que ver con emociones, y se usa en
+# varios sitios), y las tres funciones `infer_*` siguen respondiendo igual para
+# no romper ninguna llamada existente.
+#
+# Lo que cambia es que ya NO son la forma recomendada de entender al usuario:
+#
+#   ANTES:  emotion.infer_reaction_to_user(texto)  -> etiqueta -> pet.set_emotion
+#   AHORA:  CompanionBrain.process(texto)          -> afecto + necesidad +
+#                                                     seguridad + decisión +
+#                                                     expresión
+#
+# Las funciones de abajo quedan marcadas como DEPRECADAS para el análisis del
+# usuario. Se mantienen porque:
+#   - `infer_emotion_state()` sigue siendo útil para el texto que produce YUE
+#     (no el usuario), donde no hace falta toda la maquinaria afectiva;
+#   - eliminarlas rompería `main.py` y `tests/test_core.py` sin ganar nada.
+#
+# La migración se hace llamando a `analyze_user_message()` desde los puntos que
+# analizan al USUARIO, y dejando las demás llamadas como estaban.
+
+#: Traducción de la taxonomía nueva a las etiquetas que entiende el avatar VRM.
+#: Solo se usa en el puente de compatibilidad; la ruta buena para la cara de YUE
+#: es `core.support.expression`, que decide una RESPUESTA y no una imitación.
+_AFFECT_TO_AVATAR = {
+    "joy": "happy", "excitement": "excited", "pride": "proud",
+    "relief": "relaxed", "affection": "love", "sadness": "sad",
+    "disappointment": "sad", "loneliness": "sad", "anger": "angry",
+    "frustration": "angry", "fear": "worried", "anxiety": "worried",
+    "guilt": "sad", "embarrassment": "shy", "confusion": "confused",
+    "tiredness": "sleepy", "neutral": "neutral",
+}
+
+
+def affect_to_avatar_name(emotion) -> str:
+    """Convierte una emoción de `core.affect` en etiqueta del avatar VRM."""
+    return _AFFECT_TO_AVATAR.get(str(emotion or "neutral").lower(), "neutral")
+
+
+def analyze_user_message(text: str, brain=None):
+    """Análisis COMPLETO de un mensaje del usuario (ruta recomendada).
+
+    Sustituye a `infer_reaction_to_user()` + `infer_emotion_state()` cuando lo
+    que se analiza es al USUARIO. Devuelve un `CompanionResult` con el estado
+    afectivo, lo que necesita, el nivel de riesgo, la decisión de apoyo y la
+    expresión que debería mostrar YUE.
+
+    Si el sistema nuevo no estuviera disponible por lo que sea, devuelve None y
+    quien llama puede seguir usando las funciones clásicas de este módulo. Nunca
+    lanza excepciones.
+    """
+    try:
+        if brain is None:
+            from core.companion_brain import CompanionBrain
+            brain = CompanionBrain(engine=None, use_semantic=False)
+        return brain.process(text)
+    except Exception as exc:  # pragma: no cover
+        print("[emotion] el puente afectivo no está disponible:", exc)
+        return None
+
+
+def to_emotion_state(expression) -> EmotionState:
+    """Convierte una `YueExpression` en el `EmotionState` clásico.
+
+    Permite que el código antiguo que espera `EmotionState(name, intensity,
+    duration_ms)` reciba el resultado del sistema nuevo sin cambiar su forma.
+    """
+    try:
+        return EmotionState(
+            str(getattr(expression, "name", "neutral")),
+            float(getattr(expression, "intensity", 0.5)),
+            int(getattr(expression, "duration_ms", 4500)),
+        )
+    except Exception:
+        return EmotionState("neutral", 0.5, 3500)

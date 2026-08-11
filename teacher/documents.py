@@ -447,11 +447,26 @@ def render_pdf_page_png(path_or_url: str, index: int, dpi: int = 180) -> str | N
 
 
 def ocr_image_text(png_path: str, max_chars: int = 4000) -> str:
-    """OCR de una imagen reutilizando el motor OCR de YUE (pytesseract de respaldo)."""
+    """OCR de una imagen reutilizando los motores OCR de YUE.
+
+    MEJORADO: si el camino de siempre (pytesseract) no da nada, se intenta con la
+    cadena unificada `core/screen_ocr.py` (PaddleOCR -> EasyOCR -> Tesseract). En
+    una máquina sin el binario de Tesseract pero con EasyOCR instalado, antes esto
+    devolvía "" y la página escaneada se daba por ilegible.
+    """
     if not png_path:
         return ""
     src = _read_ocr(png_path, max_chars)
-    return src.text if src.ok else ""
+    if src.ok and (src.text or "").strip():
+        return src.text
+    try:
+        from PIL import Image
+        from core import screen_ocr
+        with Image.open(png_path) as img:
+            return screen_ocr.read(img.convert("RGB"), max_chars=max_chars).get("text", "")
+    except Exception as exc:
+        print("[profesora] OCR alternativo no disponible:", exc)
+    return ""
 
 
 def read_pdf_page_deep(path_or_url: str, index: int, dpi: int = 180,
@@ -528,5 +543,86 @@ def capabilities() -> dict:
         "docx": _tiene("docx"),
         "pptx": _tiene("pptx"),
         "epub": _tiene("ebooklib") or True,   # respaldo ZIP siempre disponible
-        "ocr": _tiene("pytesseract"),
+        "ocr": _tiene("pytesseract") or _tiene("easyocr") or _tiene("paddleocr"),
     }
+
+
+# ---------------------------------------------------------------------------
+# PDF COMO ARCHIVO  vs  PDF QUE EL USUARIO ESTÁ MIRANDO EN PANTALLA  [ADITIVO]
+# ---------------------------------------------------------------------------
+# Todo lo de arriba trata el PDF como ARCHIVO: se abre, se rasteriza página a
+# página y se lee con calidad. Es lo correcto cuando el usuario entrega la ruta.
+#
+# Pero "mira el PDF que tengo abierto" es OTRA cosa: ahí no hay archivo, hay una
+# PANTALLA con un visor encima. Mezclar ambos casos era una fuente de confusión:
+# se intentaba resolver una ruta que no existía. Estas funciones separan los dos
+# caminos con claridad.
+def pdf_visible_en_pantalla() -> dict:
+    """¿Hay un visor de PDF en primer plano? Devuelve pistas, no certezas.
+
+    {'visible': bool, 'titulo': str, 'archivo': str, 'ruta': str}
+      * `archivo` es el nombre del PDF deducido del título de la ventana.
+      * `ruta` solo se rellena si ese archivo se pudo localizar en el disco; en
+        ese caso conviene tratarlo como PDF-ARCHIVO (mucha mejor calidad).
+    """
+    titulo, proceso = "", ""
+    try:
+        from core.screen_observation import active_window_info
+        info = active_window_info()
+        titulo = str(info.get("title", "") or "")
+        proceso = str(info.get("process", "") or "").lower()
+    except Exception:
+        pass
+
+    bajo = titulo.lower()
+    visores = ("acrobat", "foxit", "sumatra", "pdf-xchange", "okular", "evince")
+    es_visor = any(v in proceso or v in bajo for v in visores)
+    tiene_pdf = ".pdf" in bajo
+    if not (tiene_pdf or es_visor):
+        return {"visible": False, "titulo": titulo, "archivo": "", "ruta": ""}
+
+    # Nombre del archivo tal y como lo muestra la barra de título.
+    nombre = ""
+    m = re.search(r"([^\\/:*?\"<>|]+\.pdf)", titulo, re.I)
+    if m:
+        nombre = m.group(1).strip()
+
+    ruta = ""
+    if nombre:
+        try:
+            encontrado = find_source(nombre)
+            if encontrado and os.path.exists(encontrado):
+                ruta = encontrado
+        except Exception:
+            ruta = ""
+    return {"visible": True, "titulo": titulo, "archivo": nombre, "ruta": ruta}
+
+
+def estrategia_para_pdf(peticion: str = "") -> dict:
+    """Decide CÓMO leer un PDF según de dónde venga.
+
+    Devuelve {'modo', 'ruta', 'motivo'} con modo en:
+      * 'archivo'  -> hay una ruta real: usa read_pdf_page_deep / read_pdf_full_deep.
+                      Es el camino de MÁS calidad (texto embebido + OCR + render).
+      * 'pantalla' -> no hay archivo localizable: hay que MIRAR la pantalla con
+                      core/screen_analyzer.py (OCR + visión de la página visible).
+      * 'ninguno'  -> no se detectó ningún PDF.
+    """
+    # 1) ¿La petición trae una ruta o un nombre de archivo localizable?
+    try:
+        candidato = find_source(peticion or "")
+    except Exception:
+        candidato = None
+    if candidato and os.path.exists(candidato):
+        return {"modo": "archivo", "ruta": candidato,
+                "motivo": "el usuario indicó un archivo PDF localizable"}
+
+    # 2) ¿Hay un visor abierto en pantalla?
+    visible = pdf_visible_en_pantalla()
+    if visible.get("ruta"):
+        return {"modo": "archivo", "ruta": visible["ruta"],
+                "motivo": "el PDF abierto se localizó también como archivo"}
+    if visible.get("visible"):
+        return {"modo": "pantalla", "ruta": "",
+                "motivo": "hay un PDF abierto pero no se puede localizar el archivo"}
+    return {"modo": "ninguno", "ruta": "", "motivo": "no detecté ningún PDF"}

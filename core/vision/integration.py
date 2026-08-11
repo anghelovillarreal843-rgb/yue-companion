@@ -54,10 +54,37 @@ def attach(app) -> VisionController | None:
 
     bridge = _make_qt_bridge()
 
+    def _proponer_emocion(nombre, intensidad, ms):
+        """La percepción V3 PROPONE. El gestor decide, el renderer pinta.
+
+        Antes `bridge.avatar` iba conectado directamente a `pet.set_emotion`:
+        otra fuga que dejaba a un sensor mandando sobre el avatar. Se conserva
+        el camino antiguo solo si no hubiera gestor de estado.
+        """
+        gestor = getattr(app, "state_manager", None)
+        if gestor is not None:
+            try:
+                from core.state import Priority
+                prioridad = int(Priority.EMOTION)
+            except Exception:
+                prioridad = 60
+            try:
+                gestor.request_emotion(str(nombre), float(intensidad), int(ms),
+                                       priority=prioridad, source="vision")
+                return
+            except Exception:
+                pass
+        try:
+            pet = getattr(app, "pet", None)
+            if pet is not None:
+                pet.set_emotion(str(nombre), float(intensidad), int(ms))
+        except Exception:
+            pass
+
     if bridge is not None:
         # Conexiones a la app real (se ejecutan en el hilo de Qt).
         try:
-            bridge.avatar.connect(app.pet.set_emotion)
+            bridge.avatar.connect(_proponer_emocion)
         except Exception:
             pass
         try:
@@ -79,8 +106,10 @@ def attach(app) -> VisionController | None:
         on_speak = lambda t: bridge.speak.emit(str(t))
         on_status = lambda t, a: bridge.status.emit(str(t), bool(a))
     else:
-        # Sin Qt: llamadas directas (p. ej. pruebas headless).
-        on_avatar = lambda n, i, d: getattr(app, "pet", None) and app.pet.set_emotion(n, i, d)
+        # Sin Qt (pruebas headless): TAMBIÉN pasa por el gestor. Era la segunda
+        # fuga de este archivo, y la más fácil de olvidar precisamente porque
+        # solo se recorre en pruebas.
+        on_avatar = lambda n, i, d: _proponer_emocion(n, i, d)
         on_speak = lambda t: getattr(app, "_yue_say", lambda *_a: None)(t)
         on_status = lambda t, a: None
 

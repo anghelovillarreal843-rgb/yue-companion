@@ -118,6 +118,34 @@ class PoseAnalyzerModule(BaseDetector):
         elif dx > 0.06:
             state = "leaning_right"
 
+        # ACOSTADO (faltaba: lo pide el punto 6). El tronco casi horizontal es la
+        # señal fiable: hombros y cadera a la MISMA altura pero separados en X.
+        # Se comprueba antes que la inclinación lateral porque, tumbado, la
+        # desalineación hombro/cadera dispara "leaning_*" y lo enmascara.
+        torso_dx = abs(shoulder_cx - hip_cx)
+        torso_dy = abs(shoulder_y - hip_y)
+        if torso_dx > torso_dy * 1.6 and torso_dx > 0.10:
+            state = "lying"
+
+        # BRAZOS CRUZADOS (también del punto 6): cada muñeca cruza al lado
+        # contrario, a la altura del pecho. Sin esto había que esperar a que el
+        # analizador de acciones lo dedujera, y ese necesita los landmarks que
+        # hasta ahora no se entregaban.
+        arms_crossed = False
+        try:
+            lw_x, rw_x = x(L_WRIST), x(R_WRIST)
+            chest_y = (shoulder_y + hip_y) / 2.0
+            cruzan = lw_x < hip_cx < rw_x or rw_x < hip_cx < lw_x
+            altura_ok = (abs(y(L_WRIST) - chest_y) < torso * 0.75
+                         and abs(y(R_WRIST) - chest_y) < torso * 0.75)
+            juntas = abs(lw_x - rw_x) < abs(x(L_SHOULDER) - x(R_SHOULDER)) * 1.15
+            arms_crossed = bool(cruzan and altura_ok and juntas
+                                and not left_arm and not right_arm)
+        except Exception:
+            arms_crossed = False
+        if arms_crossed and state not in ("lying",):
+            state = "arms_crossed"
+
         # Movimiento por ventana temporal (centroide de cadera).
         self._centroids.append((hip_cx, hip_y))
         movement = "still"
@@ -127,6 +155,25 @@ class PoseAnalyzerModule(BaseDetector):
             spread = (max(xs) - min(xs)) + (max(ys) - min(ys))
             movement = "moving" if spread > 0.06 else "still"
 
+        # CORRECCIÓN (fallo silencioso): los landmarks NO se estaban guardando en
+        # la observación. `PerceptionEngine._job_pose` los copiaba a
+        # `_last_pose_landmarks`, que quedaba siempre vacío, y `ActionDetector`
+        # recibía una lista vacía en cada pasada. Consecuencia: el
+        # reconocimiento de acciones (beber, teclear, leer, posible caída,
+        # brazos cruzados) NUNCA podía dispararse, aunque todo el resto de la
+        # cadena estuviera bien. Aquí se normalizan a tuplas (x, y, z, vis)
+        # ligeras: no arrastran objetos de MediaPipe entre hilos.
+        landmarks = []
+        try:
+            landmarks = [
+                (round(float(p.x), 4), round(float(p.y), 4),
+                 round(float(getattr(p, "z", 0.0) or 0.0), 4),
+                 round(float(getattr(p, "visibility", 1.0) or 0.0), 3))
+                for p in lm
+            ]
+        except Exception:
+            landmarks = []
+
         return PoseObservation(
             visible=True,
             state=state,
@@ -134,5 +181,6 @@ class PoseAnalyzerModule(BaseDetector):
             right_arm_raised=bool(right_arm),
             both_arms_raised=bool(left_arm and right_arm),
             movement=movement,
+            landmarks=landmarks,
             confidence=round(float(vis(L_HIP)), 3),
         )

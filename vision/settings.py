@@ -41,12 +41,52 @@ def _raw(name: str):
 
 
 def get_bool(name: str, default: bool) -> bool:
+    """Booleano de config/entorno.
+
+    CORRECCIÓN (fallo real, y era el que dejaba a YUE ciega): `config.py`
+    declara a propósito algunas banderas como CADENA VACÍA para decir «no está
+    definida, usa la lógica de respaldo». El caso concreto:
+
+        VISION_CAMERA_ENABLED = os.getenv("VISION_CAMERA_ENABLED", "").strip()
+
+    `get_bool` no distinguía "" de "false": `"" not in _TRUE` -> False. Así que
+    `camera_enabled` salía False aunque `VISION_REPLACE_LEGACY=true`, y
+    `VisionSystem.start()` se cortaba en seco en:
+
+        if not self.cfg.camera_enabled: return
+
+    Es decir: TODO el sistema de visión se construía y no arrancaba nunca. Ni
+    cámara, ni detectores, ni eventos, ni reacciones. Ahora la cadena vacía (y
+    los espacios en blanco) se tratan como «sin definir» y cae al `default`,
+    que es justo lo que la lógica de respaldo espera.
+    """
     v = _raw(name)
     if v is None:
         return bool(default)
     if isinstance(v, bool):
         return v
-    return str(v).strip().lower() in _TRUE
+    texto = str(v).strip().lower()
+    if texto == "":
+        return bool(default)
+    return texto in _TRUE
+
+
+def get_confidence(name: str, default: float) -> float:
+    """Confianza 0..1, tolerando que venga en PORCENTAJE.
+
+    CORRECCIÓN (segunda contradicción real): `VISION_EMOTION_MIN_CONFIDENCE` la
+    comparten dos sistemas con escalas distintas. El de percepción V3
+    (`core/vision`) la lee en porcentaje (60 = 60%), y el `.env` del proyecto
+    tiene `VISION_EMOTION_MIN_CONFIDENCE=60`. Este paquete la compara contra
+    confianzas 0..1, así que el umbral quedaba en 60.0: IMPOSIBLE de superar y
+    las emociones no se emitían jamás.
+
+    Se normaliza: cualquier valor > 1 se entiende como porcentaje.
+    """
+    valor = get_float(name, default)
+    if valor > 1.0:
+        valor = valor / 100.0
+    return max(0.0, min(1.0, valor))
 
 
 def get_int(name: str, default: int) -> int:
@@ -234,6 +274,28 @@ class VisionSettings:
     auto_search_camera: bool = True
     max_camera_index: int = 4
 
+    # ------------------------------------------------------------------
+    # ADITIVO (capa reactiva): conecta la percepción con el avatar y la voz.
+    # Todo tiene valor por defecto, así que quien construya `VisionSettings` a
+    # mano (pruebas incluidas) sigue funcionando igual.
+    # ------------------------------------------------------------------
+    reactive_enabled: bool = True
+    reactive_poll_hz: float = 4.0
+    reactive_avatar: bool = True          # ¿puede mover el avatar?
+    reactive_speech: bool = True          # ¿puede decir frases por su cuenta?
+    reactive_greet_cooldown: float = 45.0
+    reactive_emotion_cooldown: float = 25.0
+    reactive_comment_cooldown: float = 90.0
+    reactive_object_cooldown: float = 240.0
+    reactive_gaze_cooldown: float = 180.0
+    reactive_gaze_seconds: float = 3.5
+    reactive_gaze_opens_chat: bool = True
+    reactive_max_phrases_per_minute: float = 2.0
+    reactive_log_gap: float = 1.5
+    # OCR automático cuando aparece un documento estable frente a la cámara.
+    ocr_auto_on_document: bool = True
+    ocr_document_min_score: float = 0.55
+
 
 def load() -> VisionSettings:
     """Construye un `VisionSettings` desde config/entorno, aplicando el perfil."""
@@ -289,10 +351,10 @@ def load() -> VisionSettings:
         classifier_fps=get_fps("VISION_CLASSIFIER_FPS", preset.classifier_fps or 0.2),
         max_faces=get_int("VISION_MAX_FACES", 3),
         max_hands=get_int("VISION_MAX_HANDS", 2),
-        face_min_conf=get_float("VISION_FACE_MIN_CONFIDENCE", 0.5),
-        pose_min_conf=get_float("VISION_POSE_MIN_CONFIDENCE", 0.5),
-        gesture_min_conf=get_float("VISION_GESTURE_MIN_CONFIDENCE", 0.6),
-        object_min_conf=get_float("VISION_OBJECT_MIN_CONFIDENCE", 0.5),
+        face_min_conf=get_confidence("VISION_FACE_MIN_CONFIDENCE", 0.5),
+        pose_min_conf=get_confidence("VISION_POSE_MIN_CONFIDENCE", 0.5),
+        gesture_min_conf=get_confidence("VISION_GESTURE_MIN_CONFIDENCE", 0.6),
+        object_min_conf=get_confidence("VISION_OBJECT_MIN_CONFIDENCE", 0.5),
         save_frames=get_bool("VISION_SAVE_FRAMES", False),
         external_upload=get_bool("VISION_EXTERNAL_UPLOAD", False),
         debug_overlay=get_bool("VISION_DEBUG_OVERLAY", False),
@@ -314,7 +376,7 @@ def load() -> VisionSettings:
         ocr_engine=get_str("VISION_OCR_ENGINE", "auto"),
         ocr_languages=_languages(get_str("VISION_OCR_LANGUAGES", "es")),
         ocr_min_agreements=get_int("VISION_OCR_MIN_AGREEMENTS", 3),
-        ocr_min_confidence=get_float("VISION_OCR_MIN_CONFIDENCE", 0.35),
+        ocr_min_confidence=get_confidence("VISION_OCR_MIN_CONFIDENCE", 0.35),
 
         # Escena, acciones y emociones
         scene_description_enabled=get_bool("VISION_SCENE_DESCRIPTION_ENABLED", True),
@@ -322,7 +384,7 @@ def load() -> VisionSettings:
         actions_enabled=get_bool("VISION_ACTIONS_ENABLED", True),
         action_fps=get_fps("VISION_ACTION_FPS", 6.0),
         emotions_enabled=get_bool("VISION_EMOTIONS_ENABLED", True),
-        emotion_min_confidence=get_float("VISION_EMOTION_MIN_CONFIDENCE", 0.45),
+        emotion_min_confidence=get_confidence("VISION_EMOTION_MIN_CONFIDENCE", 0.45),
         # La voz SOLO se usa como señal afectiva con permiso explícito.
         emotion_use_voice=get_bool("VISION_EMOTION_USE_VOICE", False),
         text_watch_fps=get_fps("VISION_TEXT_WATCH_FPS", 0.5),
@@ -350,4 +412,21 @@ def load() -> VisionSettings:
         legacy_camera_enabled=legacy_camera,
         auto_search_camera=get_bool("VISION_AUTO_SEARCH_CAMERA", True),
         max_camera_index=get_int("VISION_MAX_CAMERA_INDEX", 4),
+
+        # --- ADITIVO: capa reactiva (percepción -> avatar y voz) -------
+        reactive_enabled=get_bool("VISION_REACTIVE_ENABLED", True),
+        reactive_poll_hz=get_fps("VISION_REACTIVE_POLL_HZ", 4.0),
+        reactive_avatar=get_bool("VISION_REACTIVE_AVATAR", True),
+        reactive_speech=get_bool("VISION_REACTIVE_SPEECH", True),
+        reactive_greet_cooldown=get_float("VISION_REACTIVE_GREET_COOLDOWN", 45.0),
+        reactive_emotion_cooldown=get_float("VISION_REACTIVE_EMOTION_COOLDOWN", 25.0),
+        reactive_comment_cooldown=get_float("VISION_REACTIVE_COMMENT_COOLDOWN", 90.0),
+        reactive_object_cooldown=get_float("VISION_REACTIVE_OBJECT_COOLDOWN", 240.0),
+        reactive_gaze_cooldown=get_float("VISION_REACTIVE_GAZE_COOLDOWN", 180.0),
+        reactive_gaze_seconds=get_float("VISION_REACTIVE_GAZE_SECONDS", 3.5),
+        reactive_gaze_opens_chat=get_bool("VISION_REACTIVE_GAZE_OPENS_CHAT", True),
+        reactive_max_phrases_per_minute=get_float("VISION_REACTIVE_MAX_PHRASES_PER_MINUTE", 2.0),
+        reactive_log_gap=get_float("VISION_REACTIVE_LOG_GAP", 1.5),
+        ocr_auto_on_document=get_bool("VISION_OCR_AUTO_ON_DOCUMENT", True),
+        ocr_document_min_score=get_confidence("VISION_OCR_DOCUMENT_MIN_SCORE", 0.55),
     )

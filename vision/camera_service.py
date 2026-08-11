@@ -141,6 +141,7 @@ class CameraService:
             primer_fallo = 0.0
             try:
                 while not self._stop.is_set():
+                    inicio = time.monotonic()
                     ok, frame = self._safe_read(cap)
                     if not ok or frame is None:
                         ahora = time.monotonic()
@@ -161,7 +162,15 @@ class CameraService:
                     primer_fallo = 0.0
                     frames_ok += 1
                     self.hub.publish(frame)
-                    self._stop.wait(pause)
+                    # CORRECCIÓN: antes se esperaba el periodo COMPLETO después
+                    # de leer, así que el ritmo real era 1/(lectura + periodo) y
+                    # nunca se llegaba al objetivo. Con una webcam que tarda
+                    # ~60 ms por fotograma y un objetivo de 15 FPS salían ~8 FPS
+                    # reales: la mitad. Ahora se descuenta lo que costó la
+                    # lectura, que es lo que hace un bucle a ritmo fijo.
+                    restante = pause - (time.monotonic() - inicio)
+                    if restante > 0:
+                        self._stop.wait(restante)
             finally:
                 self._safe_release(cap)
                 self._emit("La cámara se desconectó; volveré a buscarla.", False)

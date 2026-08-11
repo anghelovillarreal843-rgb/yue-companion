@@ -45,6 +45,26 @@ def handle(system, command: str, arg: str = "") -> str | None:
     if command in {"/vision", "/visión"}:
         if arg in {"", "estado", "status"}:
             return _fmt_status(system)
+        # --- ADITIVO: el estado vivo (punto 10), legible de un vistazo ------
+        if arg in {"ahora", "veo", "resumen", "live"}:
+            try:
+                return "Ahora mismo: " + system.resumen_visual()
+            except Exception as exc:
+                return f"No pude leer el estado visual: {exc}"
+        if arg in {"json", "vision_state", "completo", "volcado"}:
+            try:
+                return _fmt_vision_state(system.vision_state())
+            except Exception as exc:
+                return f"No pude leer el estado visual: {exc}"
+        if arg in {"reactiva", "reactivo", "reacciones"}:
+            capa = getattr(system, "reactive", None)
+            if capa is None:
+                return ("La capa reactiva no está montada. Revisa que "
+                        "VISION_PERCEPTION_ENABLED y VISION_REACTIVE_ENABLED "
+                        "estén en true.")
+            return (f"Capa reactiva: {'activa' if capa.running else 'parada'} · "
+                    f"{capa.poll_hz:.0f} Hz · máx {capa.max_frases_min:.0f} frases/min · "
+                    f"contacto visual {capa.gaze_seconds:.1f}s")
         if arg in {"objetos", "objects"}:
             from vision.dialogue_context import describe_objects
             return describe_objects(system.snapshot())
@@ -112,6 +132,44 @@ def handle(system, command: str, arg: str = "") -> str | None:
         return _fmt_status(system)
 
     return None
+
+
+def _fmt_vision_state(estado: dict) -> str:
+    """Vuelca el `vision_state` en texto legible (para /vision json)."""
+    personas = estado.get("personas", {})
+    principal = personas.get("principal") or {}
+    emo = estado.get("emociones", {})
+    mirada = estado.get("mirada", {})
+    postura = estado.get("postura", {})
+    manos = estado.get("manos", {})
+    texto = estado.get("texto", {})
+    camara = estado.get("camara", {})
+    objetos = [o.get("etiqueta", "") for o in estado.get("objetos", [])]
+    gestos = estado.get("gestos", {})
+    edad = estado.get("actualizado_hace", float("inf"))
+
+    lineas = [
+        "vision_state:",
+        f"  cámara      : {'activa' if camara.get('activa') else 'inactiva'} "
+        f"· {camara.get('fps', 0):.0f} FPS · índice {camara.get('indice')}",
+        f"  personas    : {personas.get('count', 0)}"
+        + (f" · {principal.get('posicion', '')} · {principal.get('distancia', '')}"
+           if principal else ""),
+        f"  emoción     : {emo.get('emocion', '—')} "
+        f"(confianza {emo.get('confianza', 0):.2f}, certeza {emo.get('certeza', '—')})",
+        f"  mirada      : {'mira a YUE' if mirada.get('mira_a_yue') else 'fuera'} "
+        f"· {mirada.get('segundos_mirando', 0):.1f}s · {mirada.get('estado_es', '—')}",
+        f"  postura     : {postura.get('estado', '—')} · {postura.get('movimiento', '—')}"
+        + (" · mano levantada" if postura.get("mano_levantada") else ""),
+        f"  manos       : {manos.get('count', 0)} · {manos.get('dedos_totales', 0)} dedos",
+        f"  gestos      : {gestos.get('ultimo') or '—'}"
+        + (f" (hace {gestos.get('hace', 0):.0f}s)" if gestos.get("ultimo") else ""),
+        f"  objetos     : {', '.join(objetos) if objetos else '—'}",
+        f"  texto       : {(texto.get('texto') or '—')[:60]}",
+        f"  escena      : {estado.get('escena', {}).get('lugar', '—')}",
+        f"  actualizado : hace {edad:.1f}s" if edad != float("inf") else "  actualizado : nunca",
+    ]
+    return "\n".join(lineas)
 
 
 def _privacy_text(system) -> str:

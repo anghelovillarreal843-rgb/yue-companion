@@ -1,6 +1,13 @@
 """Consolidación de memoria a largo plazo: comprime el historial VIEJO en
 resúmenes cortos y persistentes que vuelven a entrar al prompt.
 
+NUEVO · Esta capa es también el punto donde arranca la MEMORIA NARRATIVA
+(`core/story_memory.py`): al final de `consolidate()` se llama a
+`consolidate_stories()`, que hace evolucionar las historias persistentes. Son
+dos cosas distintas y COEXISTEN: `memoria_larga` sigue guardando el resumen
+histórico difuso de siempre, y Story Memory guarda los hilos concretos de su
+vida. Ni se sustituyen ni se pisan.
+
 El problema: hoy el prompt se arma solo con lo reciente (12 mensajes crudos, 20
 hechos manuales, ánimo/actividad de 7 días). Pasado ese horizonte, todo sigue en
 SQLite pero YUE no vuelve a leerlo: a escala de meses/años su memoria es casi
@@ -182,4 +189,37 @@ def consolidate(memory, ai_engine) -> str | None:
         memory.set_state(_ESTADO_KEY, ahora)
     except Exception:
         pass  # el resumen ya está guardado; a lo sumo se reintentará antes de tiempo
+
+    # (e) NUEVO · MEMORIA NARRATIVA. Aprovechamos que ya toca consolidar para
+    # hacer evolucionar las HISTORIAS (core/story_memory.py). Es una capa
+    # aparte y ADITIVA: el resumen de arriba se guarda igual, con o sin esto.
+    # Si Story Memory está desactivada, falla o ni siquiera existe el módulo,
+    # esta función devuelve exactamente lo mismo que devolvía antes.
+    consolidate_stories(memory, ai_engine)
     return resumen
+
+
+def consolidate_stories(memory, ai_engine, *, force: bool = False) -> dict | None:
+    """Hace evolucionar las historias persistentes. Best-effort y opcional.
+
+    Vive aquí para que main.py siga teniendo UN solo punto de entrada de
+    consolidación, pero la lógica entera está en `core/story_memory.py`: este
+    módulo NO se convierte en un monolito.
+
+    Devuelve el informe de la consolidación narrativa, o None si no se pudo.
+    Nunca lanza: un problema con las historias no puede impedir que la memoria
+    a largo plazo de siempre siga funcionando.
+    """
+    if not _cfg("STORY_MEMORY_ENABLED", True):
+        return None
+    try:
+        from core.story_memory import StoryMemory
+    except Exception as exc:  # pragma: no cover - módulo ausente
+        print("[story-memory] no disponible:", exc)
+        return None
+    try:
+        capa = StoryMemory(memory=memory, engine=ai_engine)
+        return capa.consolidate(force=force)
+    except Exception as exc:
+        print("[story-memory] la consolidación narrativa falló:", exc)
+        return None

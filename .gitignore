@@ -63,3 +63,13 @@ Thumbs.db
 *~
 *.tmp
 *.bak
+
+# --- Bases de datos de la memoria (incluidas las nuevas rutas) ---
+data/**/*.db
+data/**/*.sqlite*
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Bancos de evaluación con datos reales (el de ejemplo SÍ se versiona) ---
+tests/eval/*_privado.jsonl
