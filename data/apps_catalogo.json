@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": 1786065138.0370271,
+  "updated_at": 1786412077.884672,
   "apps": [
     {
       "name": "Access",
@@ -427,7 +427,7 @@
     },
     {
       "name": "Microsoft Edge",
-      "target": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\151.0.4129.59\\msedge.exe",
+      "target": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\151.0.4129.72\\msedge.exe",
       "source": "uninstall",
       "key": "microsoft edge"
     },
@@ -439,7 +439,7 @@
     },
     {
       "name": "Microsoft OneDrive",
-      "target": "C:\\Program Files\\Microsoft OneDrive\\26.129.0706.0004\\OneDriveSetup.exe",
+      "target": "C:\\Program Files\\Microsoft OneDrive\\26.134.0713.0004\\OneDriveSetup.exe",
       "source": "uninstall",
       "key": "microsoft onedrive"
     },
@@ -1144,7 +1144,7 @@
     },
     {
       "name": "WebView2 Runtime de Microsoft Edge",
-      "target": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\151.0.4129.59\\msedgewebview2.exe",
+      "target": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\151.0.4129.72\\msedgewebview2.exe",
       "source": "uninstall",
       "key": "webview2 runtime de microsoft edge"
     },
