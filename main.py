@@ -30,7 +30,9 @@ from core import memory_consolidation
 from core.camera_observer import CameraObserver, CameraObservation
 from contracts.vision_host import VisionHost
 from engine.controller_ctx import ControllerContext
+from engine.ai_worker import AiWorker
 from engine.media_director import MediaCompanionDirector
+from engine.memory_proactive import MemoryProactive
 from engine.pc_director import PCDirector
 from engine.pc_worker import PCWorker, PCRecoveryWorker
 from engine.voice_director import VoiceDirector
@@ -173,22 +175,6 @@ class MediaCompanionBridge(QObject):
     reaction = pyqtSignal(object)
     avatar = pyqtSignal(object)
     status = pyqtSignal(str, bool)
-
-
-class AiWorker(QThread):
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-
-    def __init__(self, engine, messages):
-        super().__init__()
-        self.engine = engine
-        self.messages = messages
-
-    def run(self):
-        try:
-            self.done.emit(self.engine.chat(self.messages))
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 class PdfPageVisionWorker(QThread):
@@ -502,7 +488,6 @@ class Controller(QObject):
         # fallara, self.brain queda en None y todo el flujo antiguo sigue vivo.
         self.brain = None
         self.state_manager = None
-        self._last_companion = None
         try:
             from core.companion_brain import CompanionBrain
             self.brain = CompanionBrain(
@@ -519,7 +504,6 @@ class Controller(QObject):
         #
         # Si fallara, queda en None y todo el flujo anterior sigue vivo.
         self.episodic = None
-        self._episodic_lock = threading.Lock()
         try:
             from core.episodic_memory import EpisodicMemory
             if bool(getattr(config, "EPISODIC_MEMORY_ENABLED", True)):
@@ -567,7 +551,6 @@ class Controller(QObject):
         #
         # Si fallara, queda en None y todo el flujo anterior sigue vivo.
         self.story_memory = None
-        self._story_lock = threading.Lock()
         try:
             if bool(getattr(config, "STORY_MEMORY_ENABLED", True)):
                 from core.story_memory import StoryMemory
@@ -676,11 +659,7 @@ class Controller(QObject):
         except Exception as exc:
             print("[aprendizaje] paquete no disponible:", exc)
         self._vision_on = bool(config.VISION_ENABLED)
-        self._vision_busy = False
-        self._autonomy_busy = False
         self._autonomy_started_at = 0.0
-        self._last_user_activity = time.time()
-        self._last_user_text = ""
         self._chat_request_id = 0
 
         # Coordinador aditivo audio + pantalla + emoción + avatar + memoria.
@@ -745,6 +724,21 @@ class Controller(QObject):
         self.controller_ctx.confirm_notify = self.confirm_notify.emit
         self.controller_ctx.user_float = self._user_float
         self.controller_ctx.list_routines = self._list_routines
+        # PR 5.3: MemoryProactive (13 métodos de memoria/ánimo) vive en engine/.
+        self.controller_ctx.system_prompt = self._system_prompt
+        self.controller_ctx.camera = self.camera
+        self.controller_ctx.autonomy = self.autonomy
+        self.controller_ctx.modes = getattr(self, "modes", None)
+        self.controller_ctx.episodic = getattr(self, "episodic", None)
+        self.controller_ctx.story_memory = getattr(self, "story_memory", None)
+        self.controller_ctx.memory_ext = getattr(self, "memory_ext", None)
+        self.controller_ctx.pending_checkin = False
+        self.controller_ctx.last_user_activity = time.time()
+        self.controller_ctx.last_companion = None
+        self.controller_ctx.last_user_text = ""
+        self.controller_ctx.autonomy_busy = False
+        self.controller_ctx.vision_busy = False
+        self.memory_proactive = MemoryProactive(self.controller_ctx)
         self.pc_director = PCDirector(self.controller_ctx)
         # Canal de confirmación verbal + bitácora: pc_control llama desde el
         # hilo del PCWorker; YUE pregunta por voz esperando un "sí/no".
@@ -755,7 +749,7 @@ class Controller(QObject):
         self._checkin_timer.setInterval(
             max(30, int(getattr(config, "CHECKIN_CHECK_INTERVAL", 90))) * 1000
         )
-        self._checkin_timer.timeout.connect(self._maybe_checkin)
+        self._checkin_timer.timeout.connect(self.memory_proactive.maybe_checkin)
 
         self.chat.send_message.connect(self.voice.on_text_message)
         # NUEVO: arrastrar un PDF/documento al chat -> YUE lo lee en Modo Profesora.
@@ -831,7 +825,7 @@ class Controller(QObject):
         # frecuencia, consolidamos el historial viejo en un resumen persistente.
         # Best-effort: si no toca o no hay clave de IA, no hace nada. Nunca bloquea
         # el arranque ni el chat.
-        QTimer.singleShot(8000, self._schedule_memory_consolidation)
+        QTimer.singleShot(8000, self.memory_proactive.schedule_memory_consolidation)
 
         # ADITIVO (Percepción V3): sistema de percepción por cámara opt-in. Es
         # inerte si VISION_V3_ENABLED=false (por defecto): no abre la cámara, no
@@ -891,6 +885,9 @@ class Controller(QObject):
                 if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
                     self.camera.set_landmark_consumer(self.head_control.process_landmarks)
                 self.camera.start()
+                # PR 5.3: el registro de cámara MUTABLE cambió de objeto; el ctx
+                # (lo leen MemoryProactive/seguridad) debe ver siempre el actual.
+                self.controller_ctx.camera = self.camera
                 print("[vision-mp] migración activa: CameraObserver -> adaptador de percepción.")
         except Exception as exc:
             print("[vision-mp] no pude activar el adaptador de migración:", exc)
@@ -1135,7 +1132,7 @@ class Controller(QObject):
         # toda la respuesta. Antes se recalculaba desde el texto de YUE, que es
         # justo lo que hacía que un usuario furioso acabara con un avatar
         # furioso.
-        resultado = getattr(self, "_last_companion", None)
+        resultado = self.controller_ctx.last_companion
         if resultado is not None:
             # Se REPROPONE para refrescar el TTL: la cara debe durar toda la
             # respuesta. La decisión en sí ya la tomó `_publish_companion_state`.
@@ -1319,7 +1316,7 @@ class Controller(QObject):
         # sobre lo anterior cuando haya conflicto (p. ej. su carácter travieso
         # frente a un «déjame solo»).
         try:
-            resultado = getattr(self, "_last_companion", None)
+            resultado = self.controller_ctx.last_companion
             if resultado is not None and resultado.prompt_block:
                 prompt += "\n\n" + resultado.prompt_block
         except Exception:
@@ -1395,43 +1392,6 @@ class Controller(QObject):
             prompt += recuerdo_largo
         return prompt
 
-    def _external_mood_signal(self) -> bool:
-        """Señal SOSTENIDA no textual (cámara + histórico de ánimo).
-
-        Se la pasamos al cerebro afectivo para que la seguridad pueda subir
-        medio nivel cuando lo que se ve lleva un rato sin cuadrar con lo que se
-        dice. Reutiliza `safety.detect_risk_from_camera`, que ya exige
-        PERSISTENCIA por ambas vías, así que un gesto puntual no dispara nada.
-
-        A prueba de fallos: ante cualquier error, no aporta señal.
-        """
-        try:
-            return bool(safety.detect_risk_from_camera(self.camera, self.memory))
-        except Exception:
-            return False
-
-    def _should_check_visual_risk(self) -> bool:
-        """¿Inyectar la directiva de cuidado por señal visual/de ánimo sostenida?
-
-        Combina la señal de cámara con el historial de mood_log (safety decide) y
-        aplica un antirrebote: aunque la señal persista, YUE no pregunta '¿cómo
-        estás?' en cada mensaje, sino como mucho una vez cada cierto tiempo
-        (CAMERA_RISK_ASK_COOLDOWN, 15 min por defecto). Así se evita la alarma
-        constante. A prueba de fallos: ante cualquier error, no dispara nada.
-        """
-        try:
-            if not safety.detect_risk_from_camera(self.camera, self.memory):
-                return False
-        except Exception:
-            return False
-        ahora = time.time()
-        ultima = float(getattr(self, "_last_visual_risk_ask", 0.0))
-        cooldown = float(getattr(config, "CAMERA_RISK_ASK_COOLDOWN", 900.0))
-        if (ahora - ultima) < cooldown:
-            return False
-        self._last_visual_risk_ask = ahora
-        return True
-
     def _wellbeing_nudge_due(self) -> bool:
         """¿Toca el recordatorio DISCRETO de apoyo humano/profesional?
 
@@ -1489,358 +1449,6 @@ class Controller(QObject):
         except Exception:
             pass
         return True
-
-    # ---------- check-in de ánimo (/animo y proactivo) ----------
-    def _start_mood_checkin(self):
-        """Lanza el check-in explícito: pregunta la nota del 1 al 5 y espera."""
-        self._pending_checkin = True
-        try:
-            self.autonomy.mark_checkin()
-        except Exception as exc:
-            print("[checkin] no pude marcar el check-in:", exc)
-        self._yue_say(commands.MOOD_CHECKIN_PROMPT)
-
-    def _resolve_mood_checkin(self, text) -> bool:
-        """Interpreta la respuesta al check-in. True si era una nota válida.
-
-        Si lo es, la guarda en mood_log con fuente='checkin' y responde. Si no,
-        cierra el check-in en silencio y devuelve False para que el mensaje siga
-        su curso normal (se conversa y su ánimo se capta por el texto, como
-        siempre). Nunca deja al usuario atrapado en la pregunta.
-        """
-        parsed = commands.parse_mood_checkin(text)
-        if not parsed:
-            self._pending_checkin = False
-            return False
-        self._pending_checkin = False
-        try:
-            self.memory.add_mood(
-                "checkin",
-                parsed["emocion"],
-                parsed["intensidad"],
-                parsed["texto_origen"],
-            )
-        except Exception as exc:
-            print("[checkin] no pude guardar el ánimo:", exc)
-        self.chat.ensure_input_ready(focus=False)
-        self._yue_say(parsed["reply"])
-        return True
-
-    def _yue_may_take_initiative(self, minimo="medium"):
-        """¿Se permite YUE hablar primero ahora mismo?
-
-        Hasta ahora `initiative` se calculaba y no lo leía nadie: era un campo
-        decorativo más. Esta es su razón de existir.
-
-        Si el usuario pidió espacio, `SupportPolicy` pone la necesidad en
-        `GIVE_SPACE`, el mapeo la traduce a `initiative = "none"` y aquí se corta
-        cualquier intento de YUE de arrancar a hablar. Da igual que el
-        temporizador de check-in diga que toca: si alguien acaba de pedir que lo
-        dejen en paz, insistir es exactamente lo que no hay que hacer.
-
-        Devuelve True si no hay gestor (degradación: se comporta como antes).
-        """
-        gestor = getattr(self, "state_manager", None)
-        if gestor is None:
-            return True
-        try:
-            from core.state import INITIATIVE_LEVELS
-            actual = gestor.yue_state().initiative
-            return INITIATIVE_LEVELS.index(actual) >= INITIATIVE_LEVELS.index(minimo)
-        except Exception:
-            return True
-
-    # ---------- memoria episódica emocional ----------
-    def _episodic_observe(self, text):
-        """Detecta/actualiza el episodio que pueda haber en este mensaje.
-
-        Reutiliza el análisis afectivo y de seguridad que YA hizo el cerebro de
-        acompañamiento (`self._last_companion`): no se vuelve a llamar a ningún
-        modelo para saber qué siente. Lo único que se busca aquí es el
-        ACONTECIMIENTO: qué es, cuándo, por qué le importa y si merece que YUE
-        pregunte después.
-
-        A prueba de fallos y no bloqueante: si algo va mal, la conversación
-        sigue exactamente igual.
-        """
-        if getattr(self, "episodic", None) is None:
-            # Sin memoria episódica, la narrativa sigue viva por su cuenta: usa
-            # sus propias señales deterministas y el afecto ya calculado.
-            if getattr(self, "story_memory", None) is not None:
-                self._story_observe(text)
-            return
-        resultado = getattr(self, "_last_companion", None)
-        afecto = getattr(resultado, "affect", None)
-        decision = getattr(resultado, "decision", None)
-        try:
-            nivel = int(getattr(getattr(resultado, "safety", None), "level", 0) or 0)
-        except Exception:
-            nivel = 0
-
-        # El id del mensaje recién insertado, para poder trazar el origen.
-        message_id = None
-        try:
-            message_id = self.memory.last_message_id()
-        except Exception:
-            message_id = None
-
-        def _trabajo():
-            episode_id = None
-            try:
-                with self._episodic_lock:
-                    salida = self.episodic.observe(
-                        text, affect=afecto, decision=decision,
-                        safety_level=nivel, message_id=message_id)
-                episode_id = (salida or {}).get("episode_id")
-            except Exception as exc:
-                print("[episodic] fallo observando el mensaje:", exc)
-            # NUEVO (memoria narrativa): va DESPUÉS y en el mismo hilo, a
-            # propósito. Así recibe el episodio que se acaba de crear y puede
-            # apuntar a él (`source_type='emotional_episode'`) en vez de
-            # duplicar su texto, y hereda su `status` e `importance` en lugar
-            # de volver a deducirlos.
-            self._story_observe(
-                text, affect=afecto, safety_level=nivel,
-                message_id=message_id, episode_id=episode_id, inline=True)
-
-        if bool(getattr(config, "EPISODIC_ASYNC", True)):
-            threading.Thread(target=_trabajo, daemon=True,
-                             name="episodic-observe").start()
-        else:
-            _trabajo()
-
-    # ---------- memoria narrativa (historias que evolucionan) ----------
-    def _story_observe(self, text, *, affect=None, safety_level=None,
-                       message_id=None, episode_id=None, inline=False):
-        """Hace avanzar las HISTORIAS con este mensaje.
-
-        Determinista y barato: no llama a ningún modelo. Detecta a las personas
-        de las que habla, encuentra la historia que ya existe (o la crea si de
-        verdad lo merece), le añade el acontecimiento y recalcula su peso.
-
-        `inline=True` significa que ya estamos en el hilo de fondo del episodio
-        y no hace falta abrir otro.
-        """
-        if getattr(self, "story_memory", None) is None:
-            return
-        resultado = getattr(self, "_last_companion", None)
-        if affect is None:
-            affect = getattr(resultado, "affect", None)
-        if safety_level is None:
-            try:
-                safety_level = int(
-                    getattr(getattr(resultado, "safety", None), "level", 0) or 0)
-            except Exception:
-                safety_level = 0
-        if message_id is None:
-            try:
-                message_id = self.memory.last_message_id()
-            except Exception:
-                message_id = None
-
-        def _trabajo():
-            try:
-                with self._story_lock:
-                    self.story_memory.observe(
-                        text, affect=affect, episode_id=episode_id,
-                        message_id=message_id, safety_level=int(safety_level or 0))
-            except Exception as exc:
-                print("[story-memory] fallo observando el mensaje:", exc)
-
-        if inline or not bool(getattr(config, "EPISODIC_ASYNC", True)):
-            _trabajo()
-        else:
-            threading.Thread(target=_trabajo, daemon=True,
-                             name="story-observe").start()
-
-    def _story_note_response(self, respuesta):
-        """Anota la parte de YUE en la historia, no solo la de él.
-
-        Es lo que separa «tengo un registro sobre ti» de «esto lo vivimos
-        juntos»: la historia guarda también qué hizo ella en ese momento.
-        Reutiliza la misma etiqueta corta que normaliza la memoria episódica.
-        """
-        if getattr(self, "story_memory", None) is None:
-            return
-        decision = getattr(getattr(self, "_last_companion", None), "decision", None)
-
-        def _trabajo():
-            try:
-                etiqueta = ""
-                if getattr(self, "episodic", None) is not None:
-                    etiqueta = self.episodic._normalize_action(respuesta, decision)
-                with self._story_lock:
-                    self.story_memory.note_yue_action(etiqueta or "te escuchó")
-            except Exception as exc:
-                print("[story-memory] no pude anotar lo que hice:", exc)
-
-        if bool(getattr(config, "EPISODIC_ASYNC", True)):
-            threading.Thread(target=_trabajo, daemon=True,
-                             name="story-action").start()
-        else:
-            _trabajo()
-
-    def _episodic_note_response(self, respuesta):
-        """Completa `yue_action` una vez que YUE ya ha dicho lo suyo.
-
-        El episodio se crea ANTES de que ella responda, así que en ese momento
-        no se puede saber qué hizo. Aquí se anota en una etiqueta corta
-        («tranquilizó», «practicaron preguntas»); nunca la respuesta entera,
-        que ya vive en `messages`.
-        """
-        if getattr(self, "episodic", None) is None:
-            return
-        decision = getattr(getattr(self, "_last_companion", None), "decision", None)
-
-        def _trabajo():
-            try:
-                with self._episodic_lock:
-                    self.episodic.note_yue_response(respuesta, decision=decision)
-            except Exception as exc:
-                print("[episodic] no pude anotar lo que hice:", exc)
-
-        if bool(getattr(config, "EPISODIC_ASYNC", True)):
-            threading.Thread(target=_trabajo, daemon=True,
-                             name="episodic-action").start()
-        else:
-            _trabajo()
-
-    def _episodic_followup(self):
-        """Intenta retomar un acontecimiento pendiente. True si YUE va a hablar.
-
-        Es la PRIMERA opción del check-in proactivo: si hay algo concreto que
-        retomar, retomarlo es infinitamente mejor que un «¿cómo va tu día?».
-        Todos los frenos (iniciativa, espacio pedido, riesgo reciente, tope de
-        una pregunta por episodio) ya los aplica `due_followup`; aquí solo se
-        redacta y se dice.
-        """
-        if getattr(self, "episodic", None) is None:
-            return False
-        try:
-            episodio = self.episodic.due_followup()
-        except Exception as exc:
-            print("[episodic] fallo buscando seguimientos:", exc)
-            return False
-        if not episodio:
-            return False
-
-        # Se marca ANTES de hablar, a propósito: si algo falla por el camino,
-        # preferimos perder una pregunta a repetirla en el siguiente latido.
-        self.episodic.mark_followup_asked(episodio["id"])
-        try:
-            self.autonomy.mark_checkin()
-        except Exception:
-            pass
-
-        respaldo = self.episodic.fallback_followup_text(episodio)
-
-        # Con motor de IA, lo escribe ella con su propia voz. El prompt le
-        # prohíbe explícitamente sonar a recordatorio automático.
-        if getattr(self, "engine", None) is not None:
-            try:
-                instruccion = self.episodic.build_followup_prompt(episodio)
-                try:
-                    nivel, _, _ = bonding.progress(self.memory.get_bond_points())
-                except Exception:
-                    nivel = None
-                sistema = self._system_prompt(nivel)
-                mensajes = [
-                    {"role": "system", "content": sistema},
-                    {"role": "system", "content": instruccion},
-                ]
-                worker = AiWorker(self.engine, mensajes)
-                worker.done.connect(
-                    lambda texto, alt=respaldo: self._say_followup(texto or alt))
-                worker.failed.connect(
-                    lambda _error, alt=respaldo: self._say_followup(alt))
-                self.controller_ctx.workers.track(worker)
-                return True
-            except Exception as exc:
-                print("[episodic] no pude redactar el seguimiento:", exc)
-
-        self._say_followup(respaldo)
-        return True
-
-    def _say_followup(self, texto):
-        """Dice el seguimiento y lo deja en el historial como turno de YUE."""
-        limpio = (texto or "").strip()
-        if not limpio:
-            return
-        try:
-            limpio = emotion.clean_response(limpio)
-        except Exception:
-            pass
-        try:
-            self.memory.add_message("assistant", limpio)
-        except Exception:
-            pass
-        self._yue_say(limpio)
-
-    def _maybe_checkin(self):
-        """Evalúa (barato) si YUE debería preguntar el ánimo por iniciativa propia.
-
-        No intrusivo: solo si está habilitado, no hay nada en curso, el usuario
-        lleva un rato inactivo (misma lógica que autonomía) y la política de
-        Autonomy lo permite (cada X horas, máx. una vez al día). La pregunta es
-        natural y conversacional; la respuesta se capta como una charla normal.
-        """
-        try:
-            if not bool(getattr(config, "CHECKIN_ENABLED", True)):
-                return
-            if getattr(self, "_pending_checkin", False):
-                return
-            if self._autonomy_busy or self.controller_ctx.pc_busy or self._vision_busy:
-                return
-            if self.chat.is_user_composing():
-                return
-            # No interrumpir una clase en modo profesora.
-            if getattr(self, "modes", None) is not None and self.modes.current_mode() == MODE_TEACHER:
-                return
-            # No hablar por encima de la voz de YUE.
-            try:
-                if self.speaker.is_speaking:
-                    return
-            except Exception:
-                pass
-            # NUEVO: respeta la INICIATIVA decidida por el cerebro central. Si
-            # el usuario pidió espacio (GIVE_SPACE → initiative "none"), YUE no
-            # pregunta nada aunque el temporizador diga que toca. Un check-in
-            # justo después de que alguien pida que lo dejen en paz convierte el
-            # acompañamiento en acoso.
-            if not self._yue_may_take_initiative("medium"):
-                return
-            # Requiere inactividad real (misma lógica que la iniciativa autónoma).
-            idle = time.time() - self._last_user_activity
-            if idle < config.AUTONOMY_IDLE_SECONDS:
-                return
-            # NUEVO (memoria episódica): ANTES del check-in genérico, ¿hay algo
-            # CONCRETO que retomar? Preguntar «¿y al final cómo te fue con la
-            # entrevista?» es lo que distingue acompañar de rellenar silencios.
-            # Solo si no hay nada pendiente se cae al «¿cómo va tu día?» de
-            # siempre, que sigue intacto.
-            #
-            # Este camino tiene su propia política de tiempo (una pregunta por
-            # episodio, ventana de calma, bloqueo por riesgo), así que no pasa
-            # por `should_checkin()`: un acontecimiento no espera 20 horas.
-            try:
-                if self._episodic_followup():
-                    return
-            except Exception as exc:
-                print("[episodic] fallo en el seguimiento proactivo:", exc)
-            # Política de tiempo (cada X horas / máx. una vez al día): en Autonomy.
-            if not self.autonomy.should_checkin():
-                return
-            self.autonomy.mark_checkin()
-            pregunta = self.autonomy.checkin_question()
-            # La dejamos en memoria como turno de YUE para que la respuesta del
-            # usuario fluya con contexto por la conversación normal.
-            try:
-                self.memory.add_message("assistant", pregunta)
-            except Exception:
-                pass
-            self._yue_say(pregunta)
-        except Exception as exc:
-            print("[checkin] fallo evaluando el check-in proactivo:", exc)
 
     # ---------- mensajes ----------
     def on_user_message(self, text):
@@ -1906,8 +1514,8 @@ class Controller(QObject):
         # mensaje puede ser la nota del 1 al 5. Si lo es, lo guardamos y cerramos
         # aquí; si no, cancelamos el check-in sin insistir y el mensaje sigue su
         # curso normal (así el usuario nunca queda atrapado en la pregunta).
-        if getattr(self, "_pending_checkin", False):
-            if self._resolve_mood_checkin(text):
+        if self.controller_ctx.pending_checkin:
+            if self.memory_proactive.resolve_mood_checkin(text):
                 return
 
         self.autonomy.learn(text, source="user")
@@ -1920,24 +1528,24 @@ class Controller(QObject):
         #
         # Si el cerebro afectivo no está disponible, se cae al camino clásico
         # (infer_reaction_to_user) exactamente como antes.
-        self._last_companion = None
+        self.controller_ctx.last_companion = None
         if getattr(self, "brain", None) is not None:
             try:
                 contexto_reciente = self.memory.recent_messages(4)
             except Exception:
                 contexto_reciente = None
             try:
-                self._last_companion = self.brain.process(
+                self.controller_ctx.last_companion = self.brain.process(
                     text,
                     recent_messages=contexto_reciente,
-                    external_signal=self._external_mood_signal(),
+                    external_signal=self.memory_proactive.external_mood_signal(),
                 )
             except Exception as exc:
                 print("[affect] fallo el análisis afectivo, sigo con el clásico:", exc)
-                self._last_companion = None
+                self.controller_ctx.last_companion = None
 
-        if self._last_companion is not None:
-            resultado = self._last_companion
+        if self.controller_ctx.last_companion is not None:
+            resultado = self.controller_ctx.last_companion
             # NUEVO (cerebro central): el análisis se reparte entre los DOS
             # estados que antes estaban mezclados. Lo que le pasa al usuario va
             # a USER STATE; cómo reacciona YUE va como PROPUESTA al arbitraje.
@@ -2060,7 +1668,7 @@ class Controller(QObject):
         # al modelo y no vamos a congelar la interfaz por un recuerdo. El
         # episodio estará listo para el turno siguiente y para el seguimiento,
         # que es donde de verdad importa.
-        self._episodic_observe(text)
+        self.memory_proactive.episodic_observe(text)
 
         # Riesgo por TEXTO. Con el cerebro afectivo, la evaluación ya viene
         # hecha y es GRADUADA (NINGUNO/LEVE/MODERADO/ALTO/CRÍTICO) porque usa
@@ -2071,8 +1679,8 @@ class Controller(QObject):
         # Si el cerebro no está, se usa el detector clásico exactamente igual
         # que antes.
         directive = None
-        if self._last_companion is not None:
-            resultado = self._last_companion
+        if self.controller_ctx.last_companion is not None:
+            resultado = self.controller_ctx.last_companion
             if resultado.should_log_risk_event:
                 try:
                     self.memory.add_risk_event()
@@ -2080,7 +1688,7 @@ class Controller(QObject):
                     print("[bienestar] no pude registrar el evento de riesgo:", exc)
             if resultado.safety_directive:
                 directive = resultado.safety_directive
-            elif self._should_check_visual_risk():
+            elif self.memory_proactive.should_check_visual_risk():
                 directive = safety.safety_directive_visual(config.CRISIS_RESOURCES)
         elif safety.detect_risk(text):
             # Deja constancia (solo la hora) para el recordatorio de bienestar:
@@ -2090,7 +1698,7 @@ class Controller(QObject):
             except Exception as exc:
                 print("[bienestar] no pude registrar el evento de riesgo:", exc)
             directive = safety.safety_directive(config.CRISIS_RESOURCES)
-        elif self._should_check_visual_risk():
+        elif self.memory_proactive.should_check_visual_risk():
             directive = safety.safety_directive_visual(config.CRISIS_RESOURCES)
         else:
             directive = None
@@ -2112,11 +1720,11 @@ class Controller(QObject):
         # NUEVO (memoria episódica): ahora SÍ se sabe qué hizo YUE en el
         # episodio que se acaba de detectar («tranquilizó», «practicaron
         # preguntas»…). Se anota como etiqueta corta, nunca la respuesta entera.
-        self._episodic_note_response(clean)
+        self.memory_proactive.episodic_note_response(clean)
         # NUEVO (memoria narrativa): la misma etiqueta corta se anota también en
         # los acontecimientos de historia que se acaban de tocar, para que la
         # historia guarde la parte de YUE y no solo la de él.
-        self._story_note_response(clean)
+        self.memory_proactive.story_note_response(clean)
         # Pasamos el texto CRUDO: _yue_say limpia para hablar, pero infiere la
         # emoción del avatar con toda la señal del modelo (no doble-limpiada).
         self._yue_say(text, user_text)
@@ -2521,7 +2129,7 @@ class Controller(QObject):
             self._teacher_autoadvance_pending = False
             return
         # No avanzar si estás escribiendo/preguntando o si hay una orden en curso.
-        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy:
+        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy:
             QTimer.singleShot(1200, self._teacher_autoadvance_tick)
             return
         # Aún hablando: esperamos a que termine de explicar la página.
@@ -2541,7 +2149,7 @@ class Controller(QObject):
         """Verificación final y avance real a la siguiente página."""
         if not self._teacher_autoadvance or not self.teacher.guided_active():
             return
-        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy:
+        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy:
             return
         try:
             if self.speaker.is_speaking:
@@ -2715,7 +2323,7 @@ class Controller(QObject):
         # reactivamos para poder mirar ahora mismo.
         if not self._vision_on:
             self._vision_on = True
-        if self._vision_busy or self.controller_ctx.pc_busy or self.chat.is_user_composing():
+        if self.controller_ctx.vision_busy or self.controller_ctx.pc_busy or self.chat.is_user_composing():
             return
         current = self._refresh_bond()
         instruction = (
@@ -2723,7 +2331,7 @@ class Controller(QObject):
             "Ignora las ventanas del propio avatar de Yue. No enumeres todo lo visible; "
             "menciona solo lo relevante para la petición explícita del usuario."
         )
-        self._vision_busy = True
+        self.controller_ctx.vision_busy = True
         self.chat.set_status("Yue está mirando tu pantalla…")
         # ADITIVO: si se pidió visión-solo-OCR de forma EXPLÍCITA, seguimos con el
         # camino OCR de siempre. En cualquier otro caso usamos el flujo completo
@@ -2765,7 +2373,7 @@ class Controller(QObject):
             pass
 
     def _on_vision_done(self, text):
-        self._vision_busy = False
+        self.controller_ctx.vision_busy = False
         self.chat.set_status("")
         if text:
             self._yue_say(text)
@@ -2773,7 +2381,7 @@ class Controller(QObject):
             self._yue_say("Miré la pantalla pero no obtuve una descripción. ¿Lo intento de nuevo?")
 
     def _on_vision_failed(self, error):
-        self._vision_busy = False
+        self.controller_ctx.vision_busy = False
         self.chat.set_status("")
         # Antes esto solo se imprimía y parecía que "la visión no funciona".
         print("[vision] error:", error)
@@ -2834,35 +2442,6 @@ class Controller(QObject):
             self._yue_say("Mi visión funciona bien. Ya puedo mirar tu pantalla.")
         else:
             self._yue_say("Encontré el problema de mi visión; te dejé el detalle en el chat.")
-
-    # ---------- consolidación de memoria a largo plazo (al arrancar) ----------
-    def _schedule_memory_consolidation(self):
-        """Lanza la consolidación en un hilo de fondo. Best-effort: nunca bloquea
-        ni interrumpe el chat; si no toca o falla, no cambia nada."""
-        def _worker():
-            try:
-                resumen = memory_consolidation.consolidate(self.memory, self.engine)
-                if resumen:
-                    print("[memoria] consolidé un periodo del historial en un resumen.")
-            except Exception as exc:
-                print("[memoria] la consolidación falló (se reintentará):", exc)
-            # NUEVO (memoria narrativa): las historias tienen su PROPIO ritmo
-            # (STORY_CONSOLIDATION_DAYS) y su propia marca de tiempo, así que
-            # se revisan aunque el resumen a largo plazo aún no tocara. Cuando
-            # ambas tocan a la vez, `consolidate()` ya llamó a esta y la
-            # segunda llamada sale enseguida por «aún no toca»: es idempotente.
-            #
-            # Su primera mitad ni siquiera necesita modelo: sincroniza las metas
-            # y recalcula el peso de cada historia con la evidencia acumulada.
-            if getattr(self, "story_memory", None) is not None:
-                try:
-                    informe = self.story_memory.consolidate()
-                    if informe and (informe.get("created") or informe.get("events")):
-                        print("[memoria] las historias que sigo con él avanzaron.")
-                except Exception as exc:
-                    print("[story-memory] la revisión de historias falló:", exc)
-        threading.Thread(target=_worker, name="YueMemoryConsolidation",
-                         daemon=True).start()
 
     # ---------- preflight de visión (al arrancar) ----------
     def _vision_preflight(self):
@@ -2994,7 +2573,7 @@ class Controller(QObject):
         #    guardas de antes (multimedia, órdenes en curso, YUE hablando).
         try:
             if (getattr(self.audio, "media_playing", False) or self.controller_ctx.pc_busy
-                    or self._vision_busy or self.speaker.is_speaking):
+                    or self.controller_ctx.vision_busy or self.speaker.is_speaking):
                 return
         except Exception:
             pass
@@ -3065,7 +2644,7 @@ class Controller(QObject):
         # Cortes de cortesía (mismos que usa el resto de iniciativas de YUE).
         try:
             if (self.speaker.is_speaking or self.chat.is_user_composing()
-                    or self.controller_ctx.pc_busy or self._vision_busy
+                    or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy
                     or getattr(self.audio, "media_playing", False)
                     or getattr(self, "_autonomy_busy", False)
                     or getattr(self, "_emotion_talk_pending", False)):
@@ -3208,7 +2787,7 @@ class Controller(QObject):
             # Vuelve a comprobar cortesía: si mientras pensaba empezaste a hablar o
             # a escribir, no te pisamos; el momento ya pasó.
             if (self.speaker.is_speaking or self.chat.is_user_composing()
-                    or self.controller_ctx.pc_busy or self._vision_busy):
+                    or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy):
                 return
             if not clean:
                 return
@@ -3316,7 +2895,7 @@ class Controller(QObject):
         # No comenta si estorbaría: usuario escribiendo, Yue ya hablando, una
         # orden de PC/visión en curso, o la voz apagada. El cuentagotas y la
         # regla de "solo tras pausa en los diálogos" ya vienen de decide_reaction.
-        if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy
+        if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy
                 or self.speaker.is_speaking):
             return
         comentario = reaction.comment
@@ -3384,7 +2963,7 @@ class Controller(QObject):
             teacher_mode = self.modes is not None and self.modes.current_mode() == MODE_TEACHER
         except Exception:
             pass
-        if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy
+        if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy
                 or teacher_mode or self.speaker.is_speaking):
             return
         comment = reaction.comment
@@ -3461,20 +3040,20 @@ class Controller(QObject):
             self._yue_say("Iniciativa automática pausada.")
 
     def _autonomous_create(self):
-        if self._autonomy_busy or self.controller_ctx.pc_busy or self._vision_busy:
+        if self.controller_ctx.autonomy_busy or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy:
             return
         if not self.autonomy.can_create() or self.chat.is_user_composing():
             return
         # NUEVO: la iniciativa autónoma también respeta el estado de YUE. Si el
         # cerebro central decidió que toca acompañar en silencio, no se generan
         # aportes «útiles» por encima de eso.
-        if not self._yue_may_take_initiative("medium"):
+        if not self.memory_proactive.yue_may_take_initiative("medium"):
             return
         idle = time.time() - self._last_user_activity
         if idle < config.AUTONOMY_IDLE_SECONDS:
             return
 
-        self._autonomy_busy = True
+        self.controller_ctx.autonomy_busy = True
         self._autonomy_started_at = self._last_user_activity
         self.chat.set_status("Yue está preparando algo útil por iniciativa propia…")
         messages = self.autonomy.build_prompt(
@@ -3488,7 +3067,7 @@ class Controller(QObject):
         self.controller_ctx.workers.track(worker)
 
     def _on_autonomy_done(self, text):
-        self._autonomy_busy = False
+        self.controller_ctx.autonomy_busy = False
         self.chat.set_status("")
         path = self.autonomy.save_creation(text)
         still_idle = (
@@ -3510,7 +3089,7 @@ class Controller(QObject):
             print("[autonomia] creación guardada:", path)
 
     def _on_autonomy_failed(self, error):
-        self._autonomy_busy = False
+        self.controller_ctx.autonomy_busy = False
         self.chat.set_status("")
         print("[autonomia] error:", error)
 
@@ -3758,7 +3337,7 @@ class Controller(QObject):
                 # "/rutinas <nombre>" ejecuta esa rutina directamente.
                 self._run_routine(arg_l)
         elif command in {"/animo", "/ánimo"}:
-            self._start_mood_checkin()
+            self.memory_proactive.start_mood_checkin()
         elif command in {"/animo_historial", "/ánimo_historial", "/animohistorial", "/animo-historial"}:
             resumen = ""
             try:
@@ -3806,7 +3385,7 @@ class Controller(QObject):
             self.memory.add_fact(arg)
             self._yue_say("Lo guardé en mi memoria.")
         elif command in {"/recuerdos", "/diagmemoria", "/diagrecuerdos"}:
-            self._diagnose_memory(arg)
+            self.memory_proactive.diagnose_memory(arg)
         elif command == "/meta" and arg:
             self.memory.add_goal(arg)
             self.memory.add_bond_points(2)
@@ -3875,45 +3454,6 @@ class Controller(QObject):
                     print("[profesora] error de reporte:", exc)
         else:
             self._yue_say("No conozco ese comando. Usa /help.")
-
-    def _diagnose_memory(self, consulta=""):
-        """NUEVO (memoria histórica): enseña QUÉ recuerdos encontraría YUE.
-
-        `/recuerdos Andrea volvió a escribirme` responde con los recuerdos
-        antiguos que entrarían al prompt y su puntuación. Sin argumento usa el
-        último mensaje del usuario. Es una herramienta de diagnóstico: sale por
-        el chat como texto plano (sin voz), igual que /diagvoz.
-        """
-        consulta = (consulta or getattr(self, "_last_user_text", "") or "").strip()
-        if getattr(self, "memory_ext", None) is None:
-            self.chat.show_reply(
-                "La memoria histórica está desactivada "
-                "(MEMORY_RELEVANCE_ENABLED=false) o no se pudo cargar.")
-            return
-        if not consulta:
-            self.chat.show_reply(
-                "Escribe algo que buscar: /recuerdos Andrea volvió a escribirme")
-            return
-        try:
-            hits = self.memory_ext.search_history(consulta)
-        except Exception as exc:
-            self.chat.show_reply(f"No pude buscar en el historial: {exc}")
-            return
-        if not hits:
-            self.chat.show_reply(
-                f"Sin recuerdos por encima del umbral para «{consulta}».\n"
-                "Nada de esto llegaría al prompt (que es lo correcto: mejor no "
-                "recordar que recordar cualquier cosa).")
-            return
-        lineas = [f"Recuerdos que YUE usaría para «{consulta}»:"]
-        for n, h in enumerate(hits, start=1):
-            lineas.append(
-                f"{n}. score={h['score']} · similitud={h['similitud']} "
-                f"· {h['grado']} · {h['fecha_humana']} ({h['fecha']})\n"
-                f"   [{h['role']}] {h['texto']}")
-        informe = "\n".join(lineas)
-        print("[memory-ext] diagnóstico:\n" + informe)
-        self.chat.show_reply(informe)
 
     def shutdown(self):
         self.pc.cancel()

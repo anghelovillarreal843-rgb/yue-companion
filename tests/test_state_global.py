@@ -444,10 +444,12 @@ def test_estado_global_es_inmutable():
 # ==========================================================================
 # EXTRA — la iniciativa se USA, no solo se calcula
 # ==========================================================================
-def _controller_falso(gestor):
-    """Instancia mínima para probar métodos de `Controller` sin arrancar Qt."""
+def _director_falso(gestor):
+    """Instancia mínima de MemoryProactive con un ctx falso (sin Qt)."""
     import types
-    return types.SimpleNamespace(state_manager=gestor)
+    from engine.memory_proactive import MemoryProactive
+    ctx = types.SimpleNamespace(state_manager=gestor)
+    return MemoryProactive(ctx)
 
 
 def test_iniciativa_none_bloquea_hablar_primero():
@@ -458,9 +460,9 @@ def test_iniciativa_none_bloquea_hablar_primero():
         emotion="relaxed", behavior="waiting", voice_style="quiet",
         initiative="none", source="conversation",
         priority=Priority.USER, ttl=30.0))
-    app = _controller_falso(gestor)
-    assert main.Controller._yue_may_take_initiative(app, "medium") is False
-    assert main.Controller._yue_may_take_initiative(app, "low") is False
+    director = _director_falso(gestor)
+    assert director.yue_may_take_initiative("medium") is False
+    assert director.yue_may_take_initiative("low") is False
 
 
 def test_iniciativa_alta_permite_hablar_primero():
@@ -469,16 +471,15 @@ def test_iniciativa_alta_permite_hablar_primero():
     gestor.propose(YueProposal(
         emotion="playful", behavior="entertaining", initiative="high",
         source="conversation", priority=Priority.USER, ttl=30.0))
-    app = _controller_falso(gestor)
-    assert main.Controller._yue_may_take_initiative(app, "medium") is True
+    director = _director_falso(gestor)
+    assert director.yue_may_take_initiative("medium") is True
 
 
 def test_sin_gestor_la_iniciativa_no_bloquea_nada():
     """Degradación: sin cerebro central, YUE se comporta como siempre."""
-    import main
-    import types
-    app = types.SimpleNamespace(state_manager=None)
-    assert main.Controller._yue_may_take_initiative(app, "high") is True
+    _ = None  # main no se importa: la degradación vive en el director
+    director = _director_falso(None)
+    assert director.yue_may_take_initiative("high") is True
 
 
 def test_sync_system_state_refleja_la_realidad():
