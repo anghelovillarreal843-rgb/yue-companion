@@ -30,6 +30,7 @@ from core import memory_consolidation
 from core.camera_observer import CameraObserver, CameraObservation
 from contracts.vision_host import VisionHost
 from engine.controller_ctx import ControllerContext
+from engine.voice_director import VoiceDirector
 
 # NUEVO (arbitraje del avatar): prioridades con las que cada subsistema pide la
 # cara de YUE. Se resuelven contra core.state.Priority; si el gestor de estado
@@ -764,22 +765,32 @@ class Controller(QObject):
         # «Yue» (voz o texto). Configurable desde el .env. No afecta a la escucha de
         # música/vídeo del sistema, que es un subsistema aparte.
         self._wake_word_enabled = bool(getattr(config, "WAKE_WORD_ENABLED", True))
-        self._input_source = "texto"
-        self._wake_re = None   # se construye la primera vez (perezoso)
+        # PR 5.2: el estado de entrada (voz/texto) y el wake-re viven en el
+        # VoiceDirector/ctx; aquí solo se publican los componentes del host.
+        self.controller_ctx.input_source = "texto"
+        self.controller_ctx.speaker = self.speaker
+        self.controller_ctx.listener = self.listener
+        self.controller_ctx.chat = self.chat
+        self.controller_ctx.pet = self.pet
+        self.controller_ctx.state_manager = self.state_manager
+        self.controller_ctx.say = self._yue_say
+        self.controller_ctx.user_message = self.on_user_message
+        self.controller_ctx.avatar_emotion = self._set_avatar_emotion
+        self.voice = VoiceDirector(self.controller_ctx)
         self._checkin_timer = QTimer(self)
         self._checkin_timer.setInterval(
             max(30, int(getattr(config, "CHECKIN_CHECK_INTERVAL", 90))) * 1000
         )
         self._checkin_timer.timeout.connect(self._maybe_checkin)
 
-        self.chat.send_message.connect(self._on_text_message)
+        self.chat.send_message.connect(self.voice.on_text_message)
         # NUEVO: arrastrar un PDF/documento al chat -> YUE lo lee en Modo Profesora.
         self.chat.files_dropped.connect(self._on_files_dropped)
         self.pet.clicked.connect(self.toggle_chat)
         self.pet.moved.connect(lambda: self.chat.reposition(self.pet))
         self.pet.request_quit.connect(QApplication.instance().quit)
-        self.pet.toggle_voice.connect(self._toggle_voice)
-        self.pet.toggle_mic.connect(self._toggle_mic)
+        self.pet.toggle_voice.connect(self.voice.toggle_voice)
+        self.pet.toggle_mic.connect(self.voice.toggle_mic)
         self.pet.toggle_autonomy.connect(self._toggle_autonomy)
         # Última observación estructurada de pantalla (ScreenObservation).
         self._last_screen_observation = None
@@ -794,9 +805,9 @@ class Controller(QObject):
         # reacción igual que se hace con el micrófono.
         self.speaker.speaking.connect(self.audio.set_speaking)
         self.speaker.speaking.connect(self.media_companion.set_speaking)
-        self.listener.barge_in.connect(self._on_barge_in)
-        self.listener.heard.connect(self._on_heard)
-        self.listener.status.connect(self._on_mic_status)
+        self.listener.barge_in.connect(self.voice.on_barge_in)
+        self.listener.heard.connect(self.voice.on_heard)
+        self.listener.status.connect(self.voice.on_mic_status)
         # NUEVO (accesibilidad): la pregunta de confirmación se habla SIEMPRE en
         # el hilo principal (voz + UI), aunque la pida el hilo del PCWorker.
         self.confirm_request.connect(self._do_confirm_ask)
@@ -1878,9 +1889,9 @@ class Controller(QObject):
         if (getattr(self, "_wake_word_enabled", True)
                 and not getattr(self, "_pending_checkin", False)
                 and not text.startswith("/")):
-            stripped = self._strip_wake_word(text)
+            stripped = self.voice.strip_wake_word(text)
             if stripped is None:
-                self._wake_ignored(text)
+                self.voice.wake_ignored(text)
                 return
             if not stripped:
                 # Solo dijo/escribió «Yue» sin nada más: acusa recibo y espera.
@@ -4083,7 +4094,7 @@ class Controller(QObject):
         elif command in {"/diagvision", "/diagnosticovision", "/diagvisión"}:
             self._diagnose_vision()
         elif command in {"/diagvoz", "/diagmicro", "/diagmic", "/diagoido", "/diagoído"}:
-            self._diagnose_voice()
+            self.voice.diagnose_voice()
         elif command in {"/camara", "/cámara"}:
             # Aditivo: si el sistema de visión MediaPipe está enganchado, deja que
             # maneje on/off; si no reconoce el argumento, cae al comportamiento
@@ -4178,41 +4189,6 @@ class Controller(QObject):
         else:
             self._yue_say("No conozco ese comando. Usa /help.")
 
-    # ---------- voz y micrófono ----------
-    def _toggle_voice(self):
-        enabled = self.speaker.toggle()
-        try:
-            if self.state_manager is not None:
-                self.state_manager.update_system(
-                    voice="silent" if not enabled else "silent")
-        except Exception:
-            pass
-        if enabled:
-            self._yue_say("Voz activada.")
-        else:
-            self.chat.show_reply("Voz desactivada.")
-
-    def _toggle_mic(self):
-        enabled = self.listener.toggle()
-        try:
-            if self.state_manager is not None:
-                self.state_manager.update_system(
-                    mic="listening" if enabled else "off")
-        except Exception:
-            pass
-        self._yue_say("Micrófono activado." if enabled else "Micrófono desactivado.")
-
-    def _diagnose_voice(self):
-        """NUEVO (arreglo "no me escucha"): muestra el informe del micrófono en el
-        chat y en consola, para ver de un vistazo por qué YUE no te está oyendo."""
-        try:
-            informe = self.listener.diagnose()
-        except Exception as exc:
-            informe = f"No pude diagnosticar el micrófono: {exc}"
-        print("[oido] diagnóstico:\n" + informe)
-        # Al chat lo mandamos como texto plano (sin TTS) para que se lea completo.
-        self.chat.show_reply("Diagnóstico del micrófono:\n" + informe)
-
     def _diagnose_memory(self, consulta=""):
         """NUEVO (memoria histórica): enseña QUÉ recuerdos encontraría YUE.
 
@@ -4251,71 +4227,6 @@ class Controller(QObject):
         informe = "\n".join(lineas)
         print("[memory-ext] diagnóstico:\n" + informe)
         self.chat.show_reply(informe)
-
-    def _on_barge_in(self, text):
-        # Se ejecuta antes de heard: corta la historia/voz al instante.
-        self.speaker.stop()
-        self.pet.set_talking(False)
-        self._set_avatar_emotion("focused", 0.78, 2600,
-                                 priority=_PRIO_CONVERSACION, source="vision")
-        self.chat.set_status("Te escucho…")
-
-    def _on_heard(self, text):
-        # NUEVO (palabra de activación): marcamos que este mensaje llegó por VOZ,
-        # para que, si se ignora por no empezar con «Yue», no demos aviso hablado.
-        self._input_source = "voz"
-        self.on_user_message(text)
-
-    def _on_text_message(self, text):
-        # NUEVO: mensaje escrito en el chat. Marcamos la fuente como TEXTO.
-        self._input_source = "texto"
-        self.on_user_message(text)
-
-    # ---------- palabra de activación «Yue» ----------
-    def _build_wake_re(self):
-        """Compila el patrón de la palabra de activación desde config (perezoso).
-
-        Acepta variantes frecuentes del reconocedor de voz (yue/llue/jue…) y un
-        saludo opcional antes («oye Yue», «hey Yue»). Editable con WAKE_WORDS.
-        """
-        import re
-        palabras = getattr(config, "WAKE_WORDS", "yue,yué,llue,jue,hue")
-        if isinstance(palabras, str):
-            palabras = [p.strip() for p in palabras.split(",") if p.strip()]
-        if not palabras:
-            palabras = ["yue"]
-        alternativas = "|".join(re.escape(p) for p in palabras)
-        # (saludo opcional) + palabra de activación + separadores (coma, dos puntos…)
-        patron = (r"^\s*(?:(?:oye|oiga|hey|ey|ok|okay|escucha|disculpa)[\s,]+)?"
-                  r"(?:" + alternativas + r")\b[\s,:.\-–—!¡¿?]*")
-        self._wake_re = re.compile(patron, re.IGNORECASE)
-        return self._wake_re
-
-    def _strip_wake_word(self, text):
-        """Si el texto empieza por «Yue», devuelve el resto (sin el prefijo).
-        Si NO empieza por «Yue», devuelve None (el mensaje se ignora)."""
-        rex = self._wake_re or self._build_wake_re()
-        m = rex.match(text or "")
-        if not m:
-            return None
-        return (text[m.end():]).strip()
-
-    def _wake_ignored(self, text):
-        """Mensaje ignorado por no empezar con «Yue». Aviso discreto solo si se
-        escribió (para no confundir); por voz se queda callada."""
-        if getattr(self, "_input_source", "texto") == "texto":
-            try:
-                self.chat.set_status("Empieza con «Yue…» para que te responda.")
-            except Exception:
-                pass
-        # Por voz no decimos nada: así no reacciona a conversaciones ajenas.
-
-    def _on_mic_status(self, message):
-        if getattr(config, "DEBUG_STATUS", False):
-            print(f"[oido] estado: {message}")
-        if message.startswith(("no llego", "no pude", "sin ")):
-            self.chat.show_reply("No te estoy oyendo bien: " + message)
-
 
     def shutdown(self):
         self.pc.cancel()
