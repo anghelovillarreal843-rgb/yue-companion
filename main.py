@@ -29,6 +29,7 @@ from core import bonding, personality, safety, screen_capture as vision, emotion
 from core import memory_consolidation
 from core.camera_observer import CameraObserver, CameraObservation
 from contracts.vision_host import VisionHost
+from engine.controller_ctx import ControllerContext
 
 # NUEVO (arbitraje del avatar): prioridades con las que cada subsistema pide la
 # cara de YUE. Se resuelven contra core.state.Priority; si el gestor de estado
@@ -704,7 +705,7 @@ class Controller(QObject):
 
         self.pc.set_action_log_callback(self._on_pc_action_log)
 
-        self._workers = []
+        self.controller_ctx = ControllerContext()  # PR 5.1: workers viven en ctx
         self._floaters = []
         self._pc_busy = False
         self._pc_instruction = ""       # última orden de PC, para el aprendizaje
@@ -1767,7 +1768,7 @@ class Controller(QObject):
                     lambda texto, alt=respaldo: self._say_followup(texto or alt))
                 worker.failed.connect(
                     lambda _error, alt=respaldo: self._say_followup(alt))
-                self._track_worker(worker)
+                self.controller_ctx.workers.track(worker)
                 return True
             except Exception as exc:
                 print("[episodic] no pude redactar el seguimiento:", exc)
@@ -2115,7 +2116,7 @@ class Controller(QObject):
         worker = AiWorker(self.engine, messages)
         worker.done.connect(lambda answer, rid=request_id, user=text: self._on_ai_done(rid, user, answer))
         worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_ai_done(self, request_id, user_text, text):
         if request_id != self._chat_request_id:
@@ -2363,7 +2364,7 @@ class Controller(QObject):
         worker = AiWorker(self.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
         worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     # ---------- Documento arrastrado al chat (NUEVO) ----------
     def _on_files_dropped(self, paths):
@@ -2464,7 +2465,7 @@ class Controller(QObject):
             worker = PdfPageVisionWorker(self.engine, system, instruccion, material["image"])
             worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
             worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-            self._track_worker(worker)
+            self.controller_ctx.workers.track(worker)
             return
 
         # Páginas con texto (embebido u OCR): explicación normal por texto. Si es una
@@ -2480,7 +2481,7 @@ class Controller(QObject):
         worker = AiWorker(self.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
         worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _teacher_next_page(self):
         # YUE baja el PDF una pantalla (ella misma) y pasa a la siguiente página.
@@ -2670,7 +2671,7 @@ class Controller(QObject):
         worker = AiWorker(self.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_assist_done(rid, answer, spec))
         worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_teacher_assist_done(self, request_id, text, spec):
         if request_id != self._chat_request_id:
@@ -2715,7 +2716,7 @@ class Controller(QObject):
         worker = AiWorker(self.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
         worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     # ---------- visión de pantalla ----------
     def _glance(self, pregunta: str = ""):
@@ -2764,7 +2765,7 @@ class Controller(QObject):
             worker.observed.connect(self._on_screen_observed)
         worker.done.connect(self._on_vision_done)
         worker.failed.connect(self._on_vision_failed)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_screen_observed(self, obs):
         """Guarda la última observación estructurada de pantalla.
@@ -2831,7 +2832,7 @@ class Controller(QObject):
         self.chat.set_status("Diagnosticando la visión…")
         worker = VisionDiagWorker(self.engine)
         worker.done.connect(self._on_vision_diag)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_vision_diag(self, report):
         self.chat.set_status("")
@@ -2891,7 +2892,7 @@ class Controller(QObject):
             return
         worker = VisionPreflightWorker(self.engine)
         worker.done.connect(self._on_vision_preflight)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_vision_preflight(self, res):
         res = res or {}
@@ -3202,7 +3203,7 @@ class Controller(QObject):
             worker.failed.connect(
                 lambda _error, d=respaldo: self._on_emotion_talk_done(key, d)
             )
-            self._track_worker(worker)
+            self.controller_ctx.workers.track(worker)
         except Exception as exc:
             print("[camara] no pude preparar el comentario emocional:", exc)
             self._emotion_talk_pending = False
@@ -3342,7 +3343,7 @@ class Controller(QObject):
         respaldo = desc or (f"{cuando} sonaba {percibo}." if percibo else "")
         worker.done.connect(lambda answer, rid=request_id: self._on_ai_done(rid, "¿qué tal la música?", answer))
         worker.failed.connect(lambda _error, d=respaldo: (self.chat.set_status(""), self._yue_say(d)))
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_audio_status(self, text, active):
         print(f"[audio] {'activo' if active else 'inactivo'}: {text}")
@@ -3464,7 +3465,7 @@ class Controller(QObject):
         worker.progress.connect(self.chat.set_status)
         worker.done.connect(self._on_pc_done)
         worker.failed.connect(self._on_pc_failed)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_pc_done(self, result):
         self._pc_busy = False
@@ -3521,7 +3522,7 @@ class Controller(QObject):
         worker = PCRecoveryWorker(self.pc, "undo")
         worker.done.connect(self._on_undo_done)
         worker.failed.connect(self._on_recovery_failed)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_undo_done(self, res):
         self._pc_busy = False
@@ -3553,7 +3554,7 @@ class Controller(QObject):
         worker.progress.connect(self.chat.set_status)
         worker.done.connect(self._on_repeat_done)
         worker.failed.connect(self._on_recovery_failed)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_repeat_done(self, res):
         self._pc_busy = False
@@ -3627,7 +3628,7 @@ class Controller(QObject):
         worker.progress.connect(self.chat.set_status)
         worker.done.connect(self._on_routine_done)
         worker.failed.connect(self._on_recovery_failed)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_routine_done(self, res):
         self._pc_busy = False
@@ -3786,7 +3787,7 @@ class Controller(QObject):
         worker = AutonomyWorker(self.engine, messages)
         worker.done.connect(self._on_autonomy_done)
         worker.failed.connect(self._on_autonomy_failed)
-        self._track_worker(worker)
+        self.controller_ctx.workers.track(worker)
 
     def _on_autonomy_done(self, text):
         self._autonomy_busy = False
@@ -4050,7 +4051,7 @@ class Controller(QObject):
                 self.chat.set_status(""),
                 self._yue_say(f"No pude reescanear las aplicaciones: {error}")
             ))
-            self._track_worker(worker)
+            self.controller_ctx.workers.track(worker)
         elif command in {"/rutinas", "/rutina"}:
             arg_l = (arg or "").strip()
             if not arg_l:
@@ -4315,13 +4316,6 @@ class Controller(QObject):
         if message.startswith(("no llego", "no pude", "sin ")):
             self.chat.show_reply("No te estoy oyendo bien: " + message)
 
-    # ---------- workers ----------
-    def _track_worker(self, worker):
-        worker.finished.connect(
-            lambda w=worker: self._workers.remove(w) if w in self._workers else None
-        )
-        self._workers.append(worker)
-        worker.start()
 
     def shutdown(self):
         self.pc.cancel()
