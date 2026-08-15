@@ -30,6 +30,7 @@ from core import memory_consolidation
 from core.camera_observer import CameraObserver, CameraObservation
 from contracts.vision_host import VisionHost
 from engine.controller_ctx import ControllerContext
+from engine.media_director import MediaCompanionDirector
 from engine.voice_director import VoiceDirector
 
 # NUEVO (arbitraje del avatar): prioridades con las que cada subsistema pide la
@@ -814,8 +815,8 @@ class Controller(QObject):
         self.confirm_notify.connect(self._yue_say)
         # NUEVO: buffer de letra/diálogo oído mientras suena media, para que YUE
         # pueda comentar la canción/el vídeo con su contenido real.
-        self._media_heard_buffer = []   # lista de (timestamp, texto)
-        self.listener.media_heard.connect(self._on_media_heard)
+        self.media_director = MediaCompanionDirector()
+        self.listener.media_heard.connect(self.media_director.remember_heard)
         self._camera_bridge.status.connect(self._on_camera_status)
         self._camera_bridge.observation.connect(self._on_camera_observation)
         self._audio_bridge.reaction.connect(self._on_audio_reaction)
@@ -1301,7 +1302,7 @@ class Controller(QObject):
                     pass
             lyrics = ""
             try:
-                lyrics = self._recent_lyrics()
+                lyrics = self.media_director.recent_lyrics()
             except Exception:
                 lyrics = ""
             if audio_context or lyrics:
@@ -3246,37 +3247,6 @@ class Controller(QObject):
         except Exception as exc:
             print("[camara] no pude decir el comentario emocional:", exc)
 
-    def _on_media_heard(self, text):
-        """Guarda la letra/diálogo que YUE oye mientras suena media (rolling)."""
-        text = (text or "").strip()
-        if not text:
-            return
-        ahora = time.time()
-        buf = getattr(self, "_media_heard_buffer", None)
-        if buf is None:
-            self._media_heard_buffer = buf = []
-        buf.append((ahora, text))
-        # Nos quedamos con lo oído en los últimos ~3 min y como mucho 25 fragmentos.
-        corte = ahora - 180.0
-        self._media_heard_buffer = [(t, s) for (t, s) in buf if t >= corte][-25:]
-
-    def _recent_lyrics(self, max_age: float = 150.0, max_chars: int = 600) -> str:
-        """Texto reciente oído del audio (letra/diálogo), para dar contexto a YUE."""
-        ahora = time.time()
-        buf = getattr(self, "_media_heard_buffer", []) or []
-        trozos = [s for (t, s) in buf if ahora - t <= max_age]
-        if not trozos:
-            return ""
-        # De lo más reciente hacia atrás, sin pasarnos de longitud.
-        salida = []
-        total = 0
-        for s in reversed(trozos):
-            if total + len(s) > max_chars:
-                break
-            salida.append(s)
-            total += len(s)
-        return " … ".join(reversed(salida)).strip()
-
     def _describe_audio(self):
         """Responde a «¿qué tal la música / qué escuchas / qué te pareció?» diciendo
         qué suena (o sonaba hace un momento) y dando una impresión con la voz de YUE,
@@ -3305,7 +3275,7 @@ class Controller(QObject):
             except Exception:
                 reciente, edad = (None, None)
 
-        lyrics = self._recent_lyrics()
+        lyrics = self.media_director.recent_lyrics()
 
         # Si no hay nada actual ni reciente NI letra captada, respondemos directo.
         if not ahora_suena and reciente is None and not lyrics:
