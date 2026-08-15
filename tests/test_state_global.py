@@ -493,7 +493,8 @@ def test_sync_system_state_refleja_la_realidad():
         camera=types.SimpleNamespace(active=True),
         speaker=types.SimpleNamespace(is_speaking=False),
         audio=types.SimpleNamespace(media_playing=True),
-        teacher=types.SimpleNamespace(is_active=True),
+        controller_ctx=types.SimpleNamespace(
+            teacher=types.SimpleNamespace(is_active=True)),
         _pc_busy=False, _vision_busy=False, _autonomy_busy=False)
     main.Controller._sync_system_state(app)
 
@@ -514,7 +515,8 @@ def test_sync_system_state_prioriza_el_control_de_pc():
         state_manager=gestor,
         listener=types.SimpleNamespace(enabled=False),
         speaker=types.SimpleNamespace(is_speaking=True),
-        teacher=types.SimpleNamespace(is_active=True),
+        controller_ctx=types.SimpleNamespace(
+            teacher=types.SimpleNamespace(is_active=True)),
         _pc_busy=True, _vision_busy=False, _autonomy_busy=False)
     main.Controller._sync_system_state(app)
     # Controlar el PC es lo más urgente: manda sobre la clase.

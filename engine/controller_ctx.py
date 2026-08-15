@@ -49,6 +49,10 @@ class ControllerContext:
         self.user_float = None       # PR 5.4: _user_float del Controller
         self.list_routines = None    # PR 5.4: _list_routines del Controller
         self.system_prompt = None    # PR 5.3: _system_prompt del Controller
+        self.apply_mode_switch = None    # PR 5.6: TeacherDirector.apply_mode_switch
+        self.ai_failed = None            # PR 5.6: _on_ai_failed del Controller
+        self.interrupt_response = None   # PR 5.6: _interrupt_response del Controller
+        self.glance = None               # PR 5.6: _glance del Controller (visión del PDF)
         # -- estado mutable compartido (get/set explícito)
         self._input_source = "texto"
         self._pc_busy = False    # PR 5.4: flag del cerebro central (13 lectores en main)
@@ -59,6 +63,8 @@ class ControllerContext:
         self._last_user_text = ""          # PR 5.3: on_user_message + MemoryProactive
         self._autonomy_busy = False        # PR 5.3: flags del cerebro central
         self._vision_busy = False          # PR 5.3: flags del cerebro central
+        self._chat_request_id = 0          # PR 5.6: contador de peticiones en curso
+        self._teacher_autoadvance_pending = False   # PR 5.6: auto-avance del PDF
 
     @property
     def input_source(self) -> str:
@@ -131,6 +137,22 @@ class ControllerContext:
     @vision_busy.setter
     def vision_busy(self, valor: bool) -> None:
         self._vision_busy = valor
+
+    @property
+    def chat_request_id(self) -> int:
+        return self._chat_request_id
+
+    @chat_request_id.setter
+    def chat_request_id(self, valor: int) -> None:
+        self._chat_request_id = valor
+
+    @property
+    def teacher_autoadvance_pending(self) -> bool:
+        return self._teacher_autoadvance_pending
+
+    @teacher_autoadvance_pending.setter
+    def teacher_autoadvance_pending(self, valor: bool) -> None:
+        self._teacher_autoadvance_pending = valor
 
     @property
     def avatar_conversation_priority(self) -> int:

@@ -145,15 +145,9 @@ from ui.desktop_pet import DesktopPet
 from ui.foot_chat import FootChat
 from ui.floating_text import FloatingText
 
-# NUEVO: arquitectura de modos inteligentes (companion por defecto, teacher bajo demanda).
-from mode_manager import ModeManager, ModeSpec, DEFAULT_MODE
-from teacher import TeacherEngine, ProgressStore, ClassLog, PedagogyModel
-from teacher import assistant as teacher_assistant
-from teacher import participation as teacher_participation
-
-# Identificadores de modo (evitan cadenas sueltas por el código).
-MODE_COMPANION = DEFAULT_MODE          # "companion"
-MODE_TEACHER = "teacher"
+# NUEVO: arquitectura de modos inteligentes (companion por defecto, teacher bajo
+# demanda). El paquete completo de la Profesora vive en engine/teacher_director.py.
+from engine.teacher_director import MODE_COMPANION, MODE_TEACHER, TeacherDirector
 
 
 class CameraBridge(QObject):
@@ -175,33 +169,6 @@ class MediaCompanionBridge(QObject):
     reaction = pyqtSignal(object)
     avatar = pyqtSignal(object)
     status = pyqtSignal(str, bool)
-
-
-class PdfPageVisionWorker(QThread):
-    """NUEVO: hace que YUE MIRE una página de PDF rasterizada (PNG) y la explique.
-
-    A diferencia de VisionWorker (que captura la pantalla), aquí la imagen viene de
-    un archivo: la codificamos a base64 y la enviamos al modelo de visión. Se usa
-    para páginas de puras imágenes/diagramas de un PDF escaneado.
-    """
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-
-    def __init__(self, engine, system, instruction, image_path):
-        super().__init__()
-        self.engine = engine
-        self.system = system
-        self.instruction = instruction
-        self.image_path = image_path
-
-    def run(self):
-        try:
-            import base64
-            with open(self.image_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-            self.done.emit(self.engine.look(self.system, b64, self.instruction))
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 class VisionWorker(QThread):
@@ -660,7 +627,7 @@ class Controller(QObject):
             print("[aprendizaje] paquete no disponible:", exc)
         self._vision_on = bool(config.VISION_ENABLED)
         self._autonomy_started_at = 0.0
-        self._chat_request_id = 0
+        self.controller_ctx.chat_request_id = 0
 
         # Coordinador aditivo audio + pantalla + emoción + avatar + memoria.
         # Sus callbacks siempre pasan por señales Qt antes de tocar la interfaz.
@@ -728,7 +695,6 @@ class Controller(QObject):
         self.controller_ctx.system_prompt = self._system_prompt
         self.controller_ctx.camera = self.camera
         self.controller_ctx.autonomy = self.autonomy
-        self.controller_ctx.modes = getattr(self, "modes", None)
         self.controller_ctx.episodic = getattr(self, "episodic", None)
         self.controller_ctx.story_memory = getattr(self, "story_memory", None)
         self.controller_ctx.memory_ext = getattr(self, "memory_ext", None)
@@ -740,6 +706,12 @@ class Controller(QObject):
         self.controller_ctx.vision_busy = False
         self.memory_proactive = MemoryProactive(self.controller_ctx)
         self.pc_director = PCDirector(self.controller_ctx)
+        self.teacher_director = TeacherDirector(self.controller_ctx)
+        # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
+        self.controller_ctx.apply_mode_switch = self.teacher_director.apply_mode_switch
+        self.controller_ctx.ai_failed = self._on_ai_failed
+        self.controller_ctx.interrupt_response = self._interrupt_response
+        self.controller_ctx.glance = self._glance
         # Canal de confirmación verbal + bitácora: pc_control llama desde el
         # hilo del PCWorker; YUE pregunta por voz esperando un "sí/no".
         self.pc.set_confirm_callback(self.pc_director.pc_confirm_by_voice)
@@ -753,7 +725,7 @@ class Controller(QObject):
 
         self.chat.send_message.connect(self.voice.on_text_message)
         # NUEVO: arrastrar un PDF/documento al chat -> YUE lo lee en Modo Profesora.
-        self.chat.files_dropped.connect(self._on_files_dropped)
+        self.chat.files_dropped.connect(self.teacher_director.on_files_dropped)
         self.pet.clicked.connect(self.toggle_chat)
         self.pet.moved.connect(lambda: self.chat.reposition(self.pet))
         self.pet.request_quit.connect(QApplication.instance().quit)
@@ -799,10 +771,10 @@ class Controller(QObject):
         # qué motor conversa. Companion es el modo por defecto (apoyo emocional) y
         # Teacher se activa/desactiva por voz o texto. Todo es aditivo y desacoplado.
         try:
-            self._setup_modes()
+            self.teacher_director.setup_modes()
         except Exception as exc:
             print("[modos] no se pudo inicializar el sistema de modos:", exc)
-            self.modes = None
+            self.controller_ctx.modes = None
 
         self.pet.show()
         self.chat.show()
@@ -951,7 +923,7 @@ class Controller(QObject):
 
         # --- multimedia y modo profesora ---
         sonando = bool(getattr(getattr(self, "audio", None), "media_playing", False))
-        profesora = bool(getattr(getattr(self, "teacher", None), "is_active", False))
+        profesora = bool(getattr(getattr(self.controller_ctx, "teacher", None), "is_active", False))
 
         pc_ocupado = bool(getattr(self, "_pc_busy", False))
         vision_ocupada = bool(getattr(self, "_vision_busy", False))
@@ -1116,9 +1088,9 @@ class Controller(QObject):
         """Corta voz y descarta respuestas antiguas sin bloquear el chat."""
         self.speaker.stop()
         self.pet.set_talking(False)
-        self._chat_request_id += 1
+        self.controller_ctx.chat_request_id += 1
         # NUEVO: cualquier interrupción cancela un auto-avance de página pendiente.
-        self._teacher_autoadvance_pending = False
+        self.controller_ctx.teacher_autoadvance_pending = False
 
     def _yue_say(self, text, user_context=None):
         # La emoción del avatar se infiere del texto CRUDO (con toda su señal
@@ -1483,7 +1455,7 @@ class Controller(QObject):
             text = stripped
 
         self._interrupt_response()
-        request_id = self._chat_request_id
+        request_id = self.controller_ctx.chat_request_id
         self._last_user_activity = time.time()
         self._last_user_text = text
         self._user_float(text)
@@ -1603,10 +1575,10 @@ class Controller(QObject):
 
         # NUEVO: enrutador de modos (punto ÚNICO de decisión). Detecta si el
         # mensaje activa o desactiva un modo (companion/teacher/…) por voz o texto.
-        if self.modes is not None:
-            route = self.modes.handle(text)
+        if self.controller_ctx.modes is not None:
+            route = self.controller_ctx.modes.handle(text)
             if route.switched:
-                self._apply_mode_switch(route)
+                self.controller_ctx.apply_mode_switch(route)
                 return
 
         # Los comandos de control (callar, mirar pantalla, micro…) funcionan en
@@ -1645,8 +1617,8 @@ class Controller(QObject):
 
         # NUEVO: si hay un modo especial activo, la conversación va a su motor.
         # (Companion es el modo por defecto y sigue el flujo de abajo, intacto.)
-        if self.modes is not None and self.modes.current_mode() == MODE_TEACHER:
-            self._teacher_process(text)
+        if self.controller_ctx.modes is not None and self.controller_ctx.modes.current_mode() == MODE_TEACHER:
+            self.teacher_director.teacher_process(text)
             return
 
         if looks_like_pc_command(text):
@@ -1730,586 +1702,11 @@ class Controller(QObject):
         self._yue_say(text, user_text)
 
     def _on_ai_failed(self, request_id, error):
-        if request_id != self._chat_request_id:
+        if request_id != self.controller_ctx.chat_request_id:
             return
         self.chat.set_status("")
         self._yue_say("No logro conectarme con mi motor de IA. Revisa la clave de Groq y tu conexión.")
         print("[IA] error:", error)
-
-    # ---------- MODOS (companion por defecto, teacher bajo demanda) ----------
-    def _setup_modes(self):
-        """Crea el gestor de modos y registra companion + teacher. Aditivo."""
-        self.modes = ModeManager()
-
-        # Progreso de la profesora en un almacén propio (NO toca la memoria emocional).
-        try:
-            import os
-            prog_dir = os.path.join(str(config.DATA_DIR), "teacher")
-            prog_path = os.path.join(prog_dir, "progress.json")
-        except Exception:
-            prog_path = None
-        self.teacher_progress = ProgressStore(path=prog_path)
-        self.teacher = TeacherEngine(progress=self.teacher_progress, student="alumno")
-
-        # NUEVO: memoria de clases (§5/§6/§13) y modelo pedagógico aprendido del
-        # profesor (§4). Ambos en almacenes propios; si algo falla, el Modo
-        # Profesora sigue funcionando igual (todo aditivo y degradable).
-        try:
-            import os
-            teach_dir = os.path.join(str(config.DATA_DIR), "teacher")
-            self.class_log = ClassLog(path=os.path.join(teach_dir, "classes.db"))
-            self.pedagogy = PedagogyModel(path=os.path.join(teach_dir, "pedagogy.json"))
-        except Exception as exc:
-            print("[profesora] sin memoria de clases/pedagogía persistente:", exc)
-            self.class_log = ClassLog(path=None)
-            self.pedagogy = PedagogyModel(path=None)
-        self.teacher.attach(classlog=self.class_log, pedagogy=self.pedagogy)
-
-        # Política de participación activa durante la clase de un profesor humano (§8).
-        self.teacher_participation = teacher_participation.ParticipationPolicy()
-
-        # NUEVO: auto-avance de la lectura guiada de PDF. Cuando YUE termina de
-        # explicar una página, pasa sola a la siguiente y sigue explicando. Es
-        # interrumpible (si escribes, preguntas o dices «pausa» se detiene).
-        self._teacher_autoadvance = bool(getattr(config, "TEACHER_AUTOADVANCE_DEFAULT", True))
-        self._teacher_page_explaining = False   # ¿la última respuesta fue una página?
-        self._teacher_autoadvance_pending = False
-
-        self._register_modes()
-        self.modes.subscribe(self._on_mode_event)
-        # Indicador inicial: modo compañera.
-        meta = self.modes.current_meta()
-        self._update_mode_indicator(meta.get("emoji", "🤍"), meta.get("label", "Compañera"))
-
-    def _register_modes(self):
-        # --- Companion: modo por defecto (apoyo emocional). Su flujo vive en
-        #     on_user_message; aquí solo se registra su identidad e indicador. ---
-        self.modes.register_mode(ModeSpec(
-            id=MODE_COMPANION, label="Compañera", emoji="🤍", is_default=True,
-        ))
-
-        # --- Teacher: profesora virtual, activable por voz o texto. ---
-        self.modes.register_mode(ModeSpec(
-            id=MODE_TEACHER, label="Profesora", emoji="📚",
-            activation_phrases=(
-                "activa el modo profesora", "activa el modo profesor",
-                "modo profesora", "modo profesor", "modo ensenanza", "modo maestra",
-                "quiero una clase", "dame una clase", "me das una clase",
-                "ensename", "quiero aprender", "inicia una clase", "empieza una clase",
-                "comienza el modo profesora", "actua como profesora", "se mi profesora",
-            ),
-            activation_keywords=(
-                ("modo", "profesor"), ("modo", "maestra"), ("modo", "ensenanza"),
-                ("quiero", "aprender"), ("quiero", "clase"), ("dame", "clase"),
-                ("das", "clase"), ("actua", "profesora"), ("inicia", "clase"),
-                ("empieza", "clase"), ("comienza", "clase"), ("se", "profesora"),
-            ),
-            deactivation_phrases=(
-                "salir del modo profesora", "sal del modo profesora",
-                "terminar clase", "termina la clase", "finalizar clase",
-                "finaliza la clase", "desactiva modo profesora", "acaba la clase",
-                "regresa al modo companera",
-            ),
-            deactivation_keywords=(
-                ("terminar", "clase"), ("termina", "clase"), ("finalizar", "clase"),
-                ("finaliza", "clase"), ("acaba", "clase"), ("salir", "profesora"),
-                ("desactiva", "profesora"),
-            ),
-            activation_message=(
-                "📚 Modo Profesora activado. Ahora puedo enseñarte cualquier tema, leer "
-                "documentos y páginas web, evaluarte y registrar tu progreso. También "
-                "puedo ayudarte como docente: dime «crea un examen/plan/rúbrica sobre…», "
-                "«corrige este trabajo», «aprende de mi profesor» para observar una clase, "
-                "o «estadísticas» para ver cómo va todo. Para salir: «Yue, salir del modo "
-                "profesora»."
-            ),
-            deactivation_message=(
-                "📚 Clase finalizada. Guardé el progreso. Vuelvo a ser tu compañera "
-                "de siempre. ¿Hay algo más en lo que pueda ayudarte?"
-            ),
-            handler=self._teacher_process,
-            on_enter=self.teacher.on_enter,
-            on_exit=self.teacher.on_exit,
-        ))
-
-    def _on_mode_event(self, event):
-        """Reacciona a un cambio de modo: actualiza el indicador y la expresión."""
-        from mode_manager.mode_events import ENTER
-        if event.type == ENTER:
-            meta = event.meta or {}
-            self._update_mode_indicator(meta.get("emoji", ""), meta.get("label", ""))
-            # NUEVO: el modo profesora ahora PROPONE con su prioridad real
-            # (TEACHER, 80) y SIN caducidad: mientras dure la clase, gobierna.
-            # Antes usaba prioridad de conversación y un TTL de 2.6 s, así que
-            # cualquier cosa —incluida la música— le quitaba la cara a los tres
-            # segundos de empezar a explicar.
-            if event.new_mode == MODE_TEACHER:
-                self._propose_teacher_mode(True)
-            else:
-                self._propose_teacher_mode(False)
-                self._set_avatar_emotion("happy", 0.55, 2400,
-                                         priority=_PRIO_CONVERSACION, source="tarea")
-                # NUEVO: al volver al modo compañera, YUE deja de observar al
-                # profesor y de participar en clase (§4/§8). Aditivo y seguro.
-                try:
-                    if getattr(self, "pedagogy", None) is not None:
-                        self.pedagogy.set_observing(False)
-                    if getattr(self, "teacher_participation", None) is not None:
-                        self.teacher_participation.set_active(False)
-                except Exception:
-                    pass
-
-    def _propose_teacher_mode(self, activo):
-        """Entra o sale del modo profesora en el arbitraje.
-
-        Al ENTRAR se manda una propuesta sin TTL: la clase dura lo que dure y
-        nadie por debajo de prioridad 80 puede quitarle la cara a YUE.
-
-        Al SALIR se RETIRA la propuesta, y eso dispara el recálculo: no se cae a
-        neutral, sino a lo que siguiera vivo debajo (normalmente la
-        conversación). Es justo el comportamiento que se pedía en el punto 23.
-        """
-        gestor = getattr(self, "state_manager", None)
-        if gestor is None:
-            return
-        try:
-            if not activo:
-                gestor.withdraw("teacher")
-                return
-            from core.state import YueProposal
-            gestor.propose(YueProposal(
-                emotion="focused", intensity=0.7, behavior="teaching",
-                voice_style="steady", initiative="medium",
-                avatar_state="explaining", source="teacher",
-                priority=_PRIO_PROFESORA, ttl=None,
-                reason="modo profesora activo",
-            ))
-        except Exception as exc:
-            print("[estado] no pude cambiar el modo profesora:", exc)
-
-    def _update_mode_indicator(self, emoji, label):
-        try:
-            self.chat.set_mode(emoji, label)
-        except Exception as exc:
-            print("[modos] no pude actualizar el indicador:", exc)
-
-    def _apply_mode_switch(self, route):
-        """Tras activar/desactivar un modo: YUE lo anuncia. El indicador ya se
-        actualiza por el evento de modo."""
-        if route.reply:
-            self._yue_say(route.reply)
-
-    # ---------- Motor de la Profesora ----------
-    def _teacher_process(self, text):
-        """Procesa un mensaje como parte de una clase (no como compañera emocional)."""
-        # (a0) NUEVO: comandos especiales del Modo Profesora (aprender del profesor,
-        #      generar material docente, corregir trabajos, estadísticas). Si uno
-        #      de ellos maneja el mensaje, no seguimos con el flujo de enseñanza.
-        try:
-            if self._teacher_special_commands(text):
-                return
-        except Exception as exc:
-            print("[profesora] comando especial falló:", exc)
-
-        # (a1) NUEVO: si YUE está OBSERVANDO a un profesor humano (§4/§8), este
-        #      mensaje es una intervención del docente: la aprende y quizá participa.
-        _ped = getattr(self, "pedagogy", None)
-        _part = getattr(self, "teacher_participation", None)
-        if (_ped is not None and _ped.is_observing()) or (_part is not None and _part.is_active()):
-            self._teacher_observe_and_participate(text)
-            return
-
-        # (a) Si hay una lectura guiada de PDF en curso y el alumno pide avanzar,
-        #     YUE baja el PDF una pantalla y explica la siguiente página.
-        if self.teacher.guided_active() and self.teacher.wants_next(text):
-            self._teacher_next_page()
-            return
-
-        # (b) Si el mensaje trae la RUTA de un PDF, arranca la lectura guiada:
-        #     lo abre en pantalla y lo explica página por página, bajándolo ella.
-        pdf_path = self.teacher.detect_pdf(text)
-        if pdf_path:
-            self._teacher_start_guided_pdf(pdf_path)
-            return
-
-        # (c) Otras fuentes (Word, EPUB, imagen, página web): lectura completa.
-        try:
-            src = self.teacher.maybe_read_source(text)
-        except Exception as exc:
-            src = None
-            print("[profesora] error leyendo fuente:", exc)
-        if src is not None and not src.ok:
-            self._yue_say("Quería leer eso, pero no pude: " + (src.note or "formato no disponible"))
-            return
-        if src is not None and src.ok:
-            self.chat.set_status(f"Leí el material ({src.kind}). Preparando la clase…")
-            # NUEVO: construye la representación interna del material (§2/§3) y lo
-            # registra en la memoria de la clase (§5). Aditivo y a prueba de fallos.
-            try:
-                self.teacher.analyze_material(src.text, src.origin)
-                self.teacher.log_material(src.origin, src.kind)
-            except Exception as exc:
-                print("[profesora] no pude analizar/registrar el material:", exc)
-
-        messages = self.teacher.build_messages(text)
-        request_id = self._chat_request_id
-        self.chat.set_status("La profesora está preparando la clase…")
-        worker = AiWorker(self.engine, messages)
-        worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
-        worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self.controller_ctx.workers.track(worker)
-
-    # ---------- Documento arrastrado al chat (NUEVO) ----------
-    def _on_files_dropped(self, paths):
-        """Un PDF/documento soltado sobre el chat: YUE lo lee en Modo Profesora.
-
-        Reutiliza todo lo existente: activa el modo si hace falta y, según el tipo,
-        arranca la lectura guiada del PDF o la lectura completa del material.
-        """
-        import os
-        exts = getattr(self.chat, "DROP_EXTS", (".pdf", ".docx", ".pptx", ".epub",
-                                                ".txt", ".md", ".png", ".jpg", ".jpeg"))
-        docs = [p for p in (paths or []) if str(p).lower().endswith(exts)]
-        if not docs:
-            self._yue_say("Solo puedo leer documentos: PDF, Word, PowerPoint, EPUB, TXT o imágenes.")
-            return
-        path = docs[0]
-        self._interrupt_response()   # por si estaba hablando en ese momento
-
-        # La lectura de material vive en el Modo Profesora: lo activamos si aún no lo está.
-        try:
-            if self.modes is not None and self.modes.current_mode() != MODE_TEACHER:
-                route = self.modes.activate(MODE_TEACHER)
-                if route.switched:
-                    self._apply_mode_switch(route)
-        except Exception as exc:
-            print("[profesora] no pude activar el modo al soltar el documento:", exc)
-
-        nombre = os.path.basename(path)
-        if len(docs) > 1:
-            self._yue_say(f"Me pasaste {len(docs)} archivos; empiezo por «{nombre}».")
-
-        # PDF -> lectura guiada (lo abre y lo explica página por página, bajándolo ella).
-        if path.lower().endswith(".pdf"):
-            self._teacher_start_guided_pdf(path)
-        else:
-            # Word/PPT/EPUB/imagen/TXT -> lectura completa por el flujo normal de clase.
-            self._teacher_process("lee y enséñame este documento: " + path)
-
-    # ---- Lectura guiada de PDF (YUE abre el PDF y lo explica bajándolo) ----
-    def _teacher_start_guided_pdf(self, path):
-        info = self.teacher.load_pdf_guided(path)
-        local = info.get("path") or path
-        if not info["ok"]:
-            # page_count == 0: el PDF está protegido/dañado o no se pudo abrir. Como
-            # último recurso lo abrimos y lo MIRAMOS con la visión de YUE.
-            try:
-                self.pc.open_path(local)
-            except Exception as exc:
-                print("[profesora] no pude abrir el PDF:", exc)
-            self._yue_say(
-                "No pude abrir ese PDF para leerlo (quizá está protegido o dañado). "
-                "Lo abrí y voy a mirarlo con mis ojos para explicártelo."
-            )
-            QTimer.singleShot(1800, self._glance)
-            return
-        # Abre el PDF con el visor predeterminado usando la ruta ya resuelta.
-        try:
-            self.pc.open_path(local)
-        except Exception as exc:
-            print("[profesora] no pude abrir el PDF:", exc)
-        self._yue_say(
-            f"Listo, abrí el PDF: tiene {info['pages']} página(s). Lo voy a escanear "
-            "completo —incluso si está escaneado o tiene imágenes— y te lo explico "
-            "página por página, pasando yo sola a la siguiente. Dime «pausa» cuando "
-            "quieras que me detenga, o «siguiente» para apurarme."
-        )
-        # Damos tiempo a que el visor abra y tome el foco antes de explicar.
-        QTimer.singleShot(1600, self._teacher_explain_current_page)
-
-    def _teacher_vision_available(self) -> bool:
-        """¿Hay un modelo de visión configurado para MIRAR páginas de imagen?"""
-        try:
-            if getattr(config, "VISION_OCR_ONLY", False):
-                return False
-            base, key, model = self.engine._vision_endpoint()
-            return bool(base and key and model)
-        except Exception:
-            return False
-
-    def _teacher_explain_current_page(self):
-        material = self.teacher.current_page_material()
-        if not material:
-            self._yue_say("Ya terminamos el documento. ¿Quieres que repasemos algo?")
-            return
-        # Marca esta respuesta como explicación de página: al terminar de hablarla,
-        # el auto-avance podrá pasar sola a la siguiente (si está activado).
-        self._teacher_page_explaining = True
-
-        # Página de pura imagen/diagrama: si hay visión, YUE la MIRA y la explica.
-        if material.get("needs_vision") and material.get("image") and self._teacher_vision_available():
-            self.teacher.set_document_context(
-                material.get("text", ""), f"PDF página {material['page_no']} (imagen)")
-            system = self.teacher.build_system_prompt()
-            instruccion = self.teacher.build_page_vision_instruction(material)
-            request_id = self._chat_request_id
-            self.chat.set_status(
-                f"Observando la página {material['page_no']}/{material['total']} (imagen)…")
-            worker = PdfPageVisionWorker(self.engine, system, instruccion, material["image"])
-            worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
-            worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-            self.controller_ctx.workers.track(worker)
-            return
-
-        # Páginas con texto (embebido u OCR): explicación normal por texto. Si es una
-        # imagen y NO hay visión, igual usamos lo que el OCR haya podido rescatar.
-        self.teacher.set_document_context("", "")
-        messages = self.teacher.build_page_messages(material)
-        self.teacher.set_document_context(material["text"], f"PDF página {material['page_no']}")
-        request_id = self._chat_request_id
-        estado = f"Explicando la página {material['page_no']}/{material['total']}"
-        if material.get("source") == "ocr":
-            estado += " (escaneada, leída con OCR)"
-        self.chat.set_status(estado + "…")
-        worker = AiWorker(self.engine, messages)
-        worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
-        worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self.controller_ctx.workers.track(worker)
-
-    def _teacher_next_page(self):
-        # YUE baja el PDF una pantalla (ella misma) y pasa a la siguiente página.
-        self._pdf_scroll_down()
-        if not self.teacher.advance_page():
-            self._yue_say(
-                "Esa era la última página; terminamos el documento. Si quieres, te "
-                "hago un resumen o te tomo unas preguntas."
-            )
-            return
-        QTimer.singleShot(450, self._teacher_explain_current_page)
-
-    def _pdf_scroll_down(self):
-        """Envía «Avance de página» al visor del PDF que esté enfocado (mejor esfuerzo)."""
-        try:
-            self.pc._pyautogui_action({"action": "press", "key": "pagedown"})
-        except Exception as exc:
-            print("[profesora] no pude desplazar el PDF:", exc)
-
-    def _on_teacher_done(self, request_id, text):
-        if request_id != self._chat_request_id:
-            return
-        self.chat.set_status("")
-        # Extrae y registra la evaluación oculta (si la hay) y limpia el texto.
-        clean, evals = self.teacher.process_reply(text)
-        if not clean:
-            clean = "Sigamos con la clase. ¿Qué te gustaría repasar?"
-        self._yue_say(clean)
-        # NUEVO: si acabo de explicar una página del PDF y el auto-avance está
-        # activo, programo el paso a la siguiente en cuanto termine de hablar.
-        fue_pagina = self._teacher_page_explaining
-        self._teacher_page_explaining = False
-        if (fue_pagina and self._teacher_autoadvance
-                and self.teacher.guided_active()):
-            self._teacher_schedule_autoadvance()
-
-    # ---------- Auto-avance de la lectura guiada (NUEVO) ----------
-    def _teacher_schedule_autoadvance(self):
-        """Arranca la espera para pasar sola a la siguiente página."""
-        self._teacher_autoadvance_pending = True
-        QTimer.singleShot(700, self._teacher_autoadvance_tick)
-
-    def _teacher_cancel_autoadvance(self):
-        """Detiene cualquier auto-avance pendiente (al interrumpir o pausar)."""
-        self._teacher_autoadvance_pending = False
-
-    def _teacher_autoadvance_tick(self):
-        """Espera a que YUE termine de hablar (y a que no estorbe) para avanzar."""
-        if not self._teacher_autoadvance_pending:
-            return  # se canceló (interrupción del usuario, pausa, salida de modo…)
-        if not self._teacher_autoadvance or not self.teacher.guided_active():
-            self._teacher_autoadvance_pending = False
-            return
-        # No avanzar si estás escribiendo/preguntando o si hay una orden en curso.
-        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy:
-            QTimer.singleShot(1200, self._teacher_autoadvance_tick)
-            return
-        # Aún hablando: esperamos a que termine de explicar la página.
-        try:
-            hablando = bool(self.speaker.is_speaking)
-        except Exception:
-            hablando = False
-        if hablando:
-            QTimer.singleShot(700, self._teacher_autoadvance_tick)
-            return
-        # Terminó de hablar: pausa de lectura y luego pasa de página.
-        self._teacher_autoadvance_pending = False
-        pausa = int(getattr(config, "TEACHER_AUTOADVANCE_PAUSE_MS", 2500))
-        QTimer.singleShot(max(300, pausa), self._teacher_autoadvance_do)
-
-    def _teacher_autoadvance_do(self):
-        """Verificación final y avance real a la siguiente página."""
-        if not self._teacher_autoadvance or not self.teacher.guided_active():
-            return
-        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy:
-            return
-        try:
-            if self.speaker.is_speaking:
-                return
-        except Exception:
-            pass
-        self._teacher_next_page()
-
-    # ---------- Comandos especiales del Modo Profesora ----------
-    def _teacher_special_commands(self, text):
-        """Reconoce y ejecuta comandos del Modo Profesora. Devuelve True si manejó
-        el mensaje. Todo aditivo: si nada casa, devuelve False y sigue el flujo normal.
-        """
-        import unicodedata
-        n = unicodedata.normalize("NFD", (text or "").lower())
-        n = "".join(c for c in n if unicodedata.category(c) != "Mn").strip()
-
-        # --- Auto-avance de la lectura de PDF: pausar / reanudar ---
-        pausar = ("pausa la lectura", "no avances", "no pases de pagina", "no sigas sola",
-                  "para de avanzar", "deja de avanzar", "espera ahi", "quedate ahi",
-                  "quedate aqui", "modo manual", "no pases sola", "espera un momento",
-                  "no cambies de pagina")
-        reanudar = ("modo automatico", "avanza sola", "sigue sola", "sigue leyendo sola",
-                    "continua sola", "lee tu sola", "pasa sola", "sigue tu sola",
-                    "sigue leyendo tu", "avanza tu sola", "continua leyendo sola")
-        if any(g in n for g in reanudar):
-            self._teacher_autoadvance = True
-            if self.teacher.guided_active():
-                self._yue_say("Va, sigo yo sola pasando de página. Dime «pausa» cuando quieras parar.")
-                self._teacher_next_page()
-            else:
-                self._yue_say("Listo, cuando leamos un PDF iré pasando de página sola.")
-            return True
-        if any(g in n for g in pausar):
-            self._teacher_autoadvance = False
-            self._teacher_cancel_autoadvance()
-            self._yue_say("Ok, me quedo aquí. Dime «siguiente» para pasar, o «sigue sola» para que continúe yo.")
-            return True
-
-        # --- (§4/§8) Empezar/terminar de observar al profesor humano ---
-        obs_on = ("aprende de mi profesor", "observa la clase", "observa al profesor",
-                  "aprende del profesor", "escucha la clase", "modo observacion",
-                  "vas a observar", "aprende como enseno", "aprende como enseña")
-        obs_off = ("deja de observar", "termina de observar", "ya no observes",
-                   "para de aprender", "deja de escuchar la clase", "fin de la observacion")
-        if any(g in n for g in obs_off):
-            self.pedagogy.set_observing(False)
-            self.teacher_participation.set_active(False)
-            rep = self.pedagogy.report_text_es()
-            self._yue_say("Listo, dejo de observar. " + rep)
-            return True
-        if any(g in n for g in obs_on):
-            self.pedagogy.set_observing(True)
-            self.teacher_participation.set_active(True)
-            self._yue_say(
-                "De acuerdo, voy a observar cómo enseña el profesor para aprender su "
-                "estilo, y participaré solo cuando sea oportuno. Cuando termines, dime "
-                "«deja de observar»."
-            )
-            return True
-
-        # --- (§4) Contar qué he aprendido del profesor ---
-        if ("que aprendiste" in n and "profesor" in n) or "modelo pedagogico" in n \
-                or "como enseña mi profesor" in n or "como enseno mi profesor" in n:
-            self._yue_say(self.pedagogy.report_text_es())
-            return True
-
-        # --- (§13) Estadísticas educativas ---
-        if any(g in n for g in ("estadisticas", "como voy", "como vamos", "mi progreso",
-                                 "mi rendimiento", "resumen de clases", "como van los alumnos")):
-            try:
-                self._yue_say(self.class_log.stats_text_es())
-            except Exception:
-                self._yue_say(self.teacher.progress_summary())
-            return True
-
-        # --- (§11/§12) Asistente docente: generar material o corregir trabajos ---
-        spec = teacher_assistant.detect_task(text)
-        if spec is not None:
-            self._teacher_run_assistant(spec, text)
-            return True
-
-        return False
-
-    def _teacher_run_assistant(self, spec, text):
-        """Genera material docente (§11) o corrige un trabajo (§12) con el modelo."""
-        # Si hay una fuente (documento/página) en el mensaje, la usamos como material
-        # o como el propio trabajo a corregir.
-        material = ""
-        try:
-            src = self.teacher.maybe_read_source(text)
-            if src is not None and src.ok:
-                material = src.text
-                self.teacher.log_material(src.origin, src.kind)
-        except Exception as exc:
-            print("[profesora] no pude leer la fuente para la tarea:", exc)
-
-        # Recuerdo de clases pasadas y estilo aprendido, para un resultado informado.
-        memoria = ""
-        estilo = ""
-        try:
-            if spec.topic:
-                memoria = self.class_log.recall(spec.topic)
-            estilo = self.pedagogy.style_directive_es()
-        except Exception:
-            pass
-
-        messages = teacher_assistant.build_messages(
-            spec, text, material=material, memory_hint=memoria, style_hint=estilo)
-        request_id = self._chat_request_id
-        self.chat.set_status(f"Preparando {spec.label}…")
-        worker = AiWorker(self.engine, messages)
-        worker.done.connect(lambda answer, rid=request_id: self._on_teacher_assist_done(rid, answer, spec))
-        worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self.controller_ctx.workers.track(worker)
-
-    def _on_teacher_assist_done(self, request_id, text, spec):
-        if request_id != self._chat_request_id:
-            return
-        self.chat.set_status("")
-        salida = (text or "").strip() or f"No pude preparar {spec.label} esta vez."
-        # Recordatorio de rol: YUE asiste, no reemplaza al docente (§12/§15). Solo
-        # para la corrección, que es donde importa la decisión final del profesor.
-        if spec.task == "correccion":
-            salida += "\n\n(Recuerda: esto es una propuesta de apoyo; la calificación final la decides tú.)"
-        self._yue_say(salida)
-
-    # ---------- Observación del profesor y participación activa (§4/§8) ----------
-    def _teacher_observe_and_participate(self, text):
-        """Aprende del profesor humano y, si es oportuno, interviene brevemente."""
-        # 1) Aprender el estilo (§4): incorpora la intervención al modelo pedagógico.
-        try:
-            self.pedagogy.ingest(text)
-        except Exception as exc:
-            print("[profesora] no pude aprender de la intervención:", exc)
-
-        # 2) Decidir si conviene participar (§8), sin interrumpir de más.
-        try:
-            self.teacher_participation.note_teacher_turn()
-            decision = self.teacher_participation.decide(text)
-        except Exception:
-            decision = teacher_participation.Decision(False)
-        if not decision.should:
-            return
-
-        estilo = ""
-        try:
-            estilo = self.pedagogy.style_directive_es()
-        except Exception:
-            pass
-        contexto = self.teacher.current_topic()
-        messages = teacher_participation.build_intervention_messages(
-            text, decision, recent_context=contexto, style_hint=estilo)
-        self.teacher_participation.note_intervened()
-        request_id = self._chat_request_id
-        self.chat.set_status("Yue va a aportar algo a la clase…")
-        worker = AiWorker(self.engine, messages)
-        worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
-        worker.failed.connect(lambda error, rid=request_id: self._on_ai_failed(rid, error))
-        self.controller_ctx.workers.track(worker)
 
     # ---------- visión de pantalla ----------
     def _glance(self, pregunta: str = ""):
@@ -2649,8 +2046,8 @@ class Controller(QObject):
                     or getattr(self, "_autonomy_busy", False)
                     or getattr(self, "_emotion_talk_pending", False)):
                 return
-            if (getattr(self, "modes", None) is not None
-                    and self.modes.current_mode() == MODE_TEACHER):
+            if (getattr(self.controller_ctx, "modes", None) is not None
+                    and self.controller_ctx.modes.current_mode() == MODE_TEACHER):
                 return
         except Exception:
             return
@@ -2911,7 +2308,7 @@ class Controller(QObject):
         """Señales baratas para decidir si un comentario aportaría o interrumpiría."""
         teacher_mode = False
         try:
-            teacher_mode = self.modes is not None and self.modes.current_mode() == MODE_TEACHER
+            teacher_mode = self.controller_ctx.modes is not None and self.controller_ctx.modes.current_mode() == MODE_TEACHER
         except Exception:
             pass
         return {
@@ -2960,7 +2357,7 @@ class Controller(QObject):
         # composición incluso si el contexto cambió después del análisis.
         teacher_mode = False
         try:
-            teacher_mode = self.modes is not None and self.modes.current_mode() == MODE_TEACHER
+            teacher_mode = self.controller_ctx.modes is not None and self.controller_ctx.modes.current_mode() == MODE_TEACHER
         except Exception:
             pass
         if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy
@@ -3098,7 +2495,7 @@ class Controller(QObject):
         if action == "stop_current":
             self.pc.cancel()
             self.speaker.stop()
-            self._chat_request_id += 1
+            self.controller_ctx.chat_request_id += 1
             self.chat.set_status("")
             self._yue_say("Me detuve. Te escucho.")
         elif action == "pc_undo":
@@ -3427,27 +2824,27 @@ class Controller(QObject):
                 self._set_head_control(True)
         elif command == "/modo":
             # NUEVO: consulta o cambia de modo por comando.
-            if not getattr(self, "modes", None):
+            if not getattr(self.controller_ctx, "modes", None):
                 self._yue_say("El sistema de modos no está disponible.")
             elif arg:
-                route = self.modes.handle(arg)
+                route = self.controller_ctx.modes.handle(arg)
                 if route.switched:
-                    self._apply_mode_switch(route)
+                    self.controller_ctx.apply_mode_switch(route)
                 else:
-                    self._yue_say(f"No reconocí ese modo. Ahora estoy en modo {self.modes.current_meta().get('label','')}.")
+                    self._yue_say(f"No reconocí ese modo. Ahora estoy en modo {self.controller_ctx.modes.current_meta().get('label','')}.")
             else:
-                meta = self.modes.current_meta()
+                meta = self.controller_ctx.modes.current_meta()
                 self._yue_say(f"Estoy en modo {meta.get('emoji','')} {meta.get('label','')}.")
         elif command == "/reporte":
             # NUEVO: exporta el progreso de la clase (md por defecto; csv/xlsx opcional).
-            if not getattr(self, "teacher", None):
+            if not getattr(self.controller_ctx, "teacher", None):
                 self._yue_say("El modo profesora no está disponible.")
             else:
                 fmt = (arg or "md").lower().strip()
                 try:
                     import os
                     ruta = os.path.join(str(config.DATA_DIR), "teacher", f"reporte.{ 'xlsx' if fmt in ('xlsx','excel') else 'csv' if fmt=='csv' else 'md'}")
-                    salida = self.teacher.export_report(ruta, fmt)
+                    salida = self.controller_ctx.teacher.export_report(ruta, fmt)
                     self._yue_say(f"Guardé el reporte del progreso en: {salida}")
                 except Exception as exc:
                     self._yue_say("No pude generar el reporte.")
