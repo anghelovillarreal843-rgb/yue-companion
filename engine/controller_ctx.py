@@ -31,12 +31,21 @@ class ControllerContext:
         self.chat = None
         self.pet = None
         self.state_manager = None
+        self.pc = None          # PR 5.4 (PCDirector)
+        self.engine = None      # PR 5.4 (PCDirector)
+        self.memory = None      # PR 5.4 (PCDirector)
         # -- callbacks del host (cables; dueños futuros: DiálogoDirector/Orchestrator)
         self.say = None
         self.user_message = None
         self.avatar_emotion = None
+        self.confirm_speak = None    # PR 5.4: emit de confirm_request
+        self.confirm_notify = None   # PR 5.4: emit de confirm_notify
+        self.user_float = None       # PR 5.4: _user_float del Controller
+        self.list_routines = None    # PR 5.4: _list_routines del Controller
         # -- estado mutable compartido (get/set explícito)
         self._input_source = "texto"
+        self._pc_busy = False    # PR 5.4: flag del cerebro central (13 lectores en main)
+        self._pc_confirm = None  # PR 5.4: confirmación verbal pendiente
 
     @property
     def input_source(self) -> str:
@@ -45,6 +54,22 @@ class ControllerContext:
     @input_source.setter
     def input_source(self, valor: str) -> None:
         self._input_source = valor
+
+    @property
+    def pc_busy(self) -> bool:
+        return self._pc_busy
+
+    @pc_busy.setter
+    def pc_busy(self, valor: bool) -> None:
+        self._pc_busy = valor
+
+    @property
+    def pc_confirm(self):
+        return self._pc_confirm
+
+    @pc_confirm.setter
+    def pc_confirm(self, valor) -> None:
+        self._pc_confirm = valor
 
     @property
     def avatar_conversation_priority(self) -> int:

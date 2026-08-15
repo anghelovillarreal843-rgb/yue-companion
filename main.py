@@ -31,6 +31,8 @@ from core.camera_observer import CameraObserver, CameraObservation
 from contracts.vision_host import VisionHost
 from engine.controller_ctx import ControllerContext
 from engine.media_director import MediaCompanionDirector
+from engine.pc_director import PCDirector
+from engine.pc_worker import PCWorker, PCRecoveryWorker
 from engine.voice_director import VoiceDirector
 
 # NUEVO (arbitraje del avatar): prioridades con las que cada subsistema pide la
@@ -431,39 +433,18 @@ class AppScanWorker(QThread):
             self.failed.emit(str(exc))
 
 
-class PCWorker(QThread):
-    progress = pyqtSignal(str)
-    done = pyqtSignal(dict)
+class AutonomyWorker(QThread):
+    done = pyqtSignal(str)
     failed = pyqtSignal(str)
 
-    def __init__(self, controller, engine, instruction):
+    def __init__(self, engine, messages):
         super().__init__()
-        self.controller = controller
         self.engine = engine
-        self.instruction = instruction
+        self.messages = messages
 
     def run(self):
-        # --- aprendizaje: si ya sé hacer esto, lo repito sin gastar visión ---
         try:
-            from core.learning import integration as learning
-            replay = learning.try_replay(
-                self.controller, self.instruction, progress=self.progress.emit
-            )
-            if replay is not None:
-                self.done.emit(replay)
-                return
-        except Exception as exc:
-            if "cancelada" in str(exc).lower():
-                self.failed.emit(str(exc))
-                return
-            print("[aprendizaje] no pude repetir la receta:", exc)
-
-        try:
-            self.done.emit(self.controller.execute(
-                self.instruction,
-                engine=self.engine,
-                progress=self.progress.emit,
-            ))
+            self.done.emit(self.engine.chat(self.messages, timeout=55))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -500,20 +481,6 @@ class PCRecoveryWorker(QThread):
             self.failed.emit(str(exc))
 
 
-class AutonomyWorker(QThread):
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-
-    def __init__(self, engine, messages):
-        super().__init__()
-        self.engine = engine
-        self.messages = messages
-
-    def run(self):
-        try:
-            self.done.emit(self.engine.chat(self.messages, timeout=55))
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 class Controller(QObject):
@@ -647,11 +614,6 @@ class Controller(QObject):
         self.speaker = Speaker()
         self.listener = VoiceListener()
         self.pc = PCController()
-        # NUEVO (accesibilidad): canal de confirmación verbal para acciones
-        # irreversibles. pc_control llamará a esto (desde el hilo del PCWorker)
-        # y YUE preguntará por voz esperando un "sí/no".
-        self._pc_confirm = None  # {"event", "holder"} mientras hay una pendiente
-        self.pc.set_confirm_callback(self._pc_confirm_by_voice)
         self.autonomy = Autonomy()
         self._camera_bridge = CameraBridge()
         self.camera = CameraObserver(
@@ -664,7 +626,7 @@ class Controller(QObject):
         # aparta si hay una orden de PC en curso, para no pelear por el ratón.
         self.head_control = HeadCursorController(
             click_fn=self.pc.safe_click,
-            is_blocked=lambda: self._pc_busy,
+            is_blocked=lambda: self.controller_ctx.pc_busy,
         )
         if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
             self.camera.set_landmark_consumer(self.head_control.process_landmarks)
@@ -705,12 +667,8 @@ class Controller(QObject):
         except Exception as exc:
             print("[estado] no pude enganchar el renderer del avatar:", exc)
 
-        self.pc.set_action_log_callback(self._on_pc_action_log)
-
         self.controller_ctx = ControllerContext()  # PR 5.1: workers viven en ctx
         self._floaters = []
-        self._pc_busy = False
-        self._pc_instruction = ""       # última orden de PC, para el aprendizaje
         # El módulo de lecciones necesita el LLM para reflexionar sobre los fallos.
         try:
             from core.learning import integration as learning
@@ -777,6 +735,21 @@ class Controller(QObject):
         self.controller_ctx.say = self._yue_say
         self.controller_ctx.user_message = self.on_user_message
         self.controller_ctx.avatar_emotion = self._set_avatar_emotion
+        # PR 5.4: PCDirector (~16 métodos del paquete PC) vive en engine/.
+        self.controller_ctx.pc = self.pc
+        self.controller_ctx.engine = self.engine
+        self.controller_ctx.memory = self.memory
+        self.controller_ctx.pc_busy = False
+        self.controller_ctx.pc_confirm = None
+        self.controller_ctx.confirm_speak = self.confirm_request.emit
+        self.controller_ctx.confirm_notify = self.confirm_notify.emit
+        self.controller_ctx.user_float = self._user_float
+        self.controller_ctx.list_routines = self._list_routines
+        self.pc_director = PCDirector(self.controller_ctx)
+        # Canal de confirmación verbal + bitácora: pc_control llama desde el
+        # hilo del PCWorker; YUE pregunta por voz esperando un "sí/no".
+        self.pc.set_confirm_callback(self.pc_director.pc_confirm_by_voice)
+        self.pc.set_action_log_callback(self.pc_director.on_pc_action_log)
         self.voice = VoiceDirector(self.controller_ctx)
         self._checkin_timer = QTimer(self)
         self._checkin_timer.setInterval(
@@ -811,8 +784,8 @@ class Controller(QObject):
         self.listener.status.connect(self.voice.on_mic_status)
         # NUEVO (accesibilidad): la pregunta de confirmación se habla SIEMPRE en
         # el hilo principal (voz + UI), aunque la pida el hilo del PCWorker.
-        self.confirm_request.connect(self._do_confirm_ask)
-        self.confirm_notify.connect(self._yue_say)
+        self.confirm_request.connect(self.pc_director.do_confirm_ask)
+        self.confirm_notify.connect(self.controller_ctx.say)
         # NUEVO: buffer de letra/diálogo oído mientras suena media, para que YUE
         # pueda comentar la canción/el vídeo con su contenido real.
         self.media_director = MediaCompanionDirector()
@@ -1816,7 +1789,7 @@ class Controller(QObject):
                 return
             if getattr(self, "_pending_checkin", False):
                 return
-            if self._autonomy_busy or self._pc_busy or self._vision_busy:
+            if self._autonomy_busy or self.controller_ctx.pc_busy or self._vision_busy:
                 return
             if self.chat.is_user_composing():
                 return
@@ -1878,8 +1851,8 @@ class Controller(QObject):
         # NUEVO (accesibilidad): si hay una confirmación de acción irreversible
         # esperando, este mensaje (voz o texto) es la respuesta sí/no. Se resuelve
         # aquí y no sigue por el flujo normal.
-        if getattr(self, "_pc_confirm", None) is not None:
-            self._resolve_pc_confirmation(text)
+        if self.controller_ctx.pc_confirm is not None:
+            self.pc_director.resolve_pc_confirmation(text)
             return
 
         # NUEVO (palabra de activación «Yue»): YUE solo atiende una frase (por voz o
@@ -2069,7 +2042,7 @@ class Controller(QObject):
             return
 
         if looks_like_pc_command(text):
-            self._run_pc_order(text)
+            self.pc_director.run_pc_order(text)
             return
 
         self.memory.add_message("user", text)
@@ -2548,7 +2521,7 @@ class Controller(QObject):
             self._teacher_autoadvance_pending = False
             return
         # No avanzar si estás escribiendo/preguntando o si hay una orden en curso.
-        if self.chat.is_user_composing() or self._pc_busy or self._vision_busy:
+        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy:
             QTimer.singleShot(1200, self._teacher_autoadvance_tick)
             return
         # Aún hablando: esperamos a que termine de explicar la página.
@@ -2568,7 +2541,7 @@ class Controller(QObject):
         """Verificación final y avance real a la siguiente página."""
         if not self._teacher_autoadvance or not self.teacher.guided_active():
             return
-        if self.chat.is_user_composing() or self._pc_busy or self._vision_busy:
+        if self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy:
             return
         try:
             if self.speaker.is_speaking:
@@ -2742,7 +2715,7 @@ class Controller(QObject):
         # reactivamos para poder mirar ahora mismo.
         if not self._vision_on:
             self._vision_on = True
-        if self._vision_busy or self._pc_busy or self.chat.is_user_composing():
+        if self._vision_busy or self.controller_ctx.pc_busy or self.chat.is_user_composing():
             return
         current = self._refresh_bond()
         instruction = (
@@ -3020,7 +2993,7 @@ class Controller(QObject):
         # 2) PROPUESTA: solo si la cara está libre. Se mantienen las mismas
         #    guardas de antes (multimedia, órdenes en curso, YUE hablando).
         try:
-            if (getattr(self.audio, "media_playing", False) or self._pc_busy
+            if (getattr(self.audio, "media_playing", False) or self.controller_ctx.pc_busy
                     or self._vision_busy or self.speaker.is_speaking):
                 return
         except Exception:
@@ -3092,7 +3065,7 @@ class Controller(QObject):
         # Cortes de cortesía (mismos que usa el resto de iniciativas de YUE).
         try:
             if (self.speaker.is_speaking or self.chat.is_user_composing()
-                    or self._pc_busy or self._vision_busy
+                    or self.controller_ctx.pc_busy or self._vision_busy
                     or getattr(self.audio, "media_playing", False)
                     or getattr(self, "_autonomy_busy", False)
                     or getattr(self, "_emotion_talk_pending", False)):
@@ -3235,7 +3208,7 @@ class Controller(QObject):
             # Vuelve a comprobar cortesía: si mientras pensaba empezaste a hablar o
             # a escribir, no te pisamos; el momento ya pasó.
             if (self.speaker.is_speaking or self.chat.is_user_composing()
-                    or self._pc_busy or self._vision_busy):
+                    or self.controller_ctx.pc_busy or self._vision_busy):
                 return
             if not clean:
                 return
@@ -3343,7 +3316,7 @@ class Controller(QObject):
         # No comenta si estorbaría: usuario escribiendo, Yue ya hablando, una
         # orden de PC/visión en curso, o la voz apagada. El cuentagotas y la
         # regla de "solo tras pausa en los diálogos" ya vienen de decide_reaction.
-        if (self.chat.is_user_composing() or self._pc_busy or self._vision_busy
+        if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy
                 or self.speaker.is_speaking):
             return
         comentario = reaction.comment
@@ -3411,7 +3384,7 @@ class Controller(QObject):
             teacher_mode = self.modes is not None and self.modes.current_mode() == MODE_TEACHER
         except Exception:
             pass
-        if (self.chat.is_user_composing() or self._pc_busy or self._vision_busy
+        if (self.chat.is_user_composing() or self.controller_ctx.pc_busy or self._vision_busy
                 or teacher_mode or self.speaker.is_speaking):
             return
         comment = reaction.comment
@@ -3423,141 +3396,6 @@ class Controller(QObject):
             comment, reaction.emotion, reaction.intensity
         )
         self.speaker.say(comment)
-
-    def _on_pc_action_log(self, actions):
-        """Recibe la bitácora desde PCWorker y la pinta en el hilo de Qt."""
-        try:
-            from core import ui_bridge
-            ui_bridge.post_to_ui_thread(lambda: self.chat.set_pc_actions(actions))
-        except Exception as exc:
-            print("[control-pc] no pude mostrar la bitácora:", exc)
-
-    # ---------- control del PC ----------
-    def _run_pc_order(self, instruction):
-        if self._pc_busy:
-            self._yue_say("Ya hay una orden en curso. Di «Yue, detente» para cancelarla.")
-            return
-        self._pc_busy = True
-        self._pc_instruction = instruction      # la necesitan los hooks de aprendizaje
-        self.chat.set_status("Yue está comprendiendo y planificando la orden…")
-        self._set_avatar_emotion("focused", 0.95, 9000,
-                                 priority=_PRIO_CONVERSACION, source="control_pc")
-        worker = PCWorker(self.pc, self.engine, instruction)
-        worker.progress.connect(self.chat.set_status)
-        worker.done.connect(self._on_pc_done)
-        worker.failed.connect(self._on_pc_failed)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_pc_done(self, result):
-        self._pc_busy = False
-        self.chat.set_status("")
-        # NUEVO (recuperación): recuerda este bloque para "deshacer"/"repetir",
-        # también si vino de una receta aprendida (que no pasa por execute()).
-        try:
-            self.pc.remember_result(self._pc_instruction, result)
-        except Exception as exc:
-            print("[control-pc] no pude recordar el bloque:", exc)
-        # --- aprendizaje: refuerza o crea la receta si todo salió bien ---
-        try:
-            from core.learning import integration as learning
-            learning.after_result(self._pc_instruction, result)
-        except Exception as exc:
-            print("[aprendizaje] no pude registrar el resultado:", exc)
-        count = len(result.get("actions", []))
-        cycles = result.get("cycles", 1)
-        if result.get("from_skill"):
-            self._yue_say(f"Listo. Esto ya lo sabía hacer: {count} paso{'s' if count != 1 else ''} de memoria.")
-            return
-        mode = (
-            f"con el agente autónomo en {cycles} fase{'s' if cycles != 1 else ''}"
-            if result.get("used_ai") else "con un plan determinista verificado"
-        )
-        if result.get("used_ai") and not result.get("completed", False):
-            self._yue_say(
-                f"Ejecuté {count} paso{'s' if count != 1 else ''} {mode}, pero alcancé el límite sin verificar el final. Revisa el resultado."
-            )
-        else:
-            self._yue_say(f"Ya terminé. Ejecuté {count} paso{'s' if count != 1 else ''} {mode}.")
-
-    def _on_pc_failed(self, error):
-        self._pc_busy = False
-        self.chat.set_status("")
-        # --- aprendizaje: guarda el fallo y pide la reflexión en segundo plano ---
-        try:
-            from core.learning import integration as learning
-            learning.after_error(self._pc_instruction, error, self.pc.last_history)
-        except Exception as exc:
-            print("[aprendizaje] no pude registrar el error:", exc)
-        if "cancelada" not in str(error).lower():
-            self._yue_say(f"No completé esa orden: {error}")
-        print("[control-pc] error:", error)
-
-    # ---------- recuperación: deshacer / repetir lo último ----------
-    def _undo_last_pc(self):
-        """«Deshaz eso»: revierte la última acción si es reversible con seguridad."""
-        if self._pc_busy:
-            self._yue_say("Espera a que termine lo de ahora y enseguida te lo deshago.")
-            return
-        self._pc_busy = True
-        self.chat.set_status("Deshaciendo lo último…")
-        worker = PCRecoveryWorker(self.pc, "undo")
-        worker.done.connect(self._on_undo_done)
-        worker.failed.connect(self._on_recovery_failed)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_undo_done(self, res):
-        self._pc_busy = False
-        self.chat.set_status("")
-        if res.get("undone"):
-            accion = res.get("action", "lo último")
-            self._yue_say(f"Hecho, deshice {accion}.")
-            return
-        motivo = str(res.get("reason", ""))
-        if "no tengo" in motivo or "no hay" in motivo:
-            self._yue_say("No tengo ninguna acción reciente que deshacer.")
-        else:
-            # Sin adivinar: le digo con claridad por qué no me arriesgo.
-            self._yue_say(
-                f"No puedo deshacer eso: {motivo}. Prefiero no adivinar y liarla más. "
-                "Dime qué quieres corregir y lo hago."
-            )
-
-    def _repeat_last_pc(self):
-        """«Repite eso» / «hazlo de nuevo»: reejecuta el último bloque."""
-        if self._pc_busy:
-            self._yue_say("Ya hay algo en curso; cuando termine te lo repito.")
-            return
-        self._pc_busy = True
-        self.chat.set_status("Repitiendo lo último…")
-        self._set_avatar_emotion("focused", 0.9, 6000,
-                                 priority=_PRIO_CONVERSACION, source="control_pc")
-        worker = PCRecoveryWorker(self.pc, "repeat")
-        worker.progress.connect(self.chat.set_status)
-        worker.done.connect(self._on_repeat_done)
-        worker.failed.connect(self._on_recovery_failed)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_repeat_done(self, res):
-        self._pc_busy = False
-        self.chat.set_status("")
-        if not res.get("repeated"):
-            motivo = str(res.get("reason", ""))
-            if "no tengo" in motivo:
-                self._yue_say("No tengo ninguna orden reciente que repetir. Pídemela una vez y luego ya puedo repetirla.")
-            else:
-                self._yue_say(f"No pude repetir lo último: {motivo}.")
-            return
-        n = len(res.get("actions", []))
-        pasos = f"{n} paso{'s' if n != 1 else ''}"
-        if res.get("ok"):
-            self._yue_say(f"Listo, repetí lo último ({pasos}).")
-        else:
-            self._yue_say(f"Repetí lo último ({pasos}), pero algo no salió igual que antes. Échale un vistazo.")
-
-    def _on_recovery_failed(self, error):
-        self._pc_busy = False
-        self.chat.set_status("")
-        self._yue_say(f"No pude completar eso: {error}")
 
     # ---------- rutinas guardadas ----------
     def _save_routine(self, nombre):
@@ -3584,51 +3422,6 @@ class Controller(QObject):
             f"Guardado como rutina «{nombre}» ({n} paso{'s' if n != 1 else ''}). "
             f"Cuando quieras, solo di «ejecuta mi rutina {nombre}»."
         )
-
-    def _run_routine(self, nombre):
-        """«Ejecuta mi rutina X»: reejecuta el plan por el pipeline seguro."""
-        nombre = (nombre or "").strip()
-        if not nombre:
-            self._list_routines(prefijo="¿Cuál de estas quieres que ejecute? ")
-            return
-        rutina = self.memory.get_routine(nombre)
-        if not rutina or not rutina.get("pasos"):
-            self._yue_say(
-                f"No encuentro una rutina llamada «{nombre}». Di «mis rutinas» para ver las que tienes."
-            )
-            return
-        if self._pc_busy:
-            self._yue_say("Ya hay algo en curso; cuando termine lanzo tu rutina.")
-            return
-        self._pc_busy = True
-        self._pc_instruction = f"rutina: {rutina['nombre']}"
-        self.chat.set_status(f"Ejecutando la rutina «{rutina['nombre']}»…")
-        self._set_avatar_emotion("focused", 0.9, 8000,
-                                 priority=_PRIO_CONVERSACION, source="control_pc")
-        worker = PCRecoveryWorker(self.pc, "routine", actions=rutina["pasos"], label=rutina["nombre"])
-        worker.progress.connect(self.chat.set_status)
-        worker.done.connect(self._on_routine_done)
-        worker.failed.connect(self._on_recovery_failed)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_routine_done(self, res):
-        self._pc_busy = False
-        self.chat.set_status("")
-        # Aprendizaje: refuerza/crea receta si todo salió bien (igual que una orden).
-        try:
-            from core.learning import integration as learning
-            learning.after_result(self._pc_instruction, res)
-        except Exception as exc:
-            print("[aprendizaje] no pude registrar la rutina:", exc)
-        if not res.get("ran"):
-            self._yue_say(f"No pude ejecutar la rutina: {res.get('reason', 'algo salió mal')}.")
-            return
-        n = len(res.get("actions", []))
-        pasos = f"{n} paso{'s' if n != 1 else ''}"
-        if res.get("ok"):
-            self._yue_say(f"Rutina completada ({pasos}).")
-        else:
-            self._yue_say(f"Ejecuté la rutina ({pasos}), pero algo no salió como esperaba. Échale un vistazo.")
 
     def _list_routines(self, prefijo=""):
         """«Mis rutinas»: lista las guardadas."""
@@ -3657,82 +3450,6 @@ class Controller(QObject):
         else:
             self._yue_say("Todavía no hay mucho en la bitácora de esta semana.")
 
-    # ---------- accesibilidad: confirmación verbal de acciones irreversibles ----------
-    def _pc_confirm_by_voice(self, question: str) -> bool:
-        """Pide confirmación por voz y ESPERA la respuesta (sí/no).
-
-        Se llama desde el hilo del PCWorker, así que aquí SOLO se marshaliza la
-        pregunta al hilo principal (voz + UI) y se bloquea en un Event hasta que
-        el listener/chat entregue la respuesta o venza el tiempo. Si no hay
-        respuesta clara a tiempo, devuelve False (no ejecutar) por seguridad.
-        """
-        event = threading.Event()
-        holder = {"result": False}
-        self._pc_confirm = {"event": event, "holder": holder}
-        # Que YUE lo pregunte por voz en el hilo principal (usa core/voice.py).
-        self.confirm_request.emit(question)
-        timeout = float(getattr(config, "ACCESSIBILITY_CONFIRM_TIMEOUT", 25.0))
-        answered = event.wait(max(3.0, timeout))
-        self._pc_confirm = None
-        if not answered:
-            self.confirm_notify.emit(
-                "No te escuché, así que mejor no lo hago. Si lo quieres, dímelo otra vez."
-            )
-            return False
-        return bool(holder["result"])
-
-    def _do_confirm_ask(self, question: str):
-        """Habla la pregunta de confirmación (siempre en el hilo principal)."""
-        self.chat.set_status("Esperando tu «sí» o «no»…")
-        self._yue_say(question)
-
-    def _resolve_pc_confirmation(self, text: str):
-        """Interpreta la respuesta del usuario a una confirmación pendiente."""
-        pending = self._pc_confirm
-        if pending is None:
-            return
-        self._user_float(text)
-        verdict = self._parse_yes_no(text)
-        if verdict is None:
-            # No fue un sí/no claro: re-preguntamos y seguimos esperando.
-            self._yue_say("Perdona, solo dime «sí» o «no».")
-            return
-        if pending["event"].is_set():
-            return  # ya resuelto (p. ej. dos respuestas seguidas)
-        pending["holder"]["result"] = verdict
-        pending["event"].set()
-        self.chat.set_status("")
-        # Un reconocimiento breve; el resultado final de la orden lo confirmará.
-        self._yue_say("Vale, lo hago." if verdict else "Vale, lo dejo así.")
-
-    @staticmethod
-    def _parse_yes_no(text: str):
-        """Devuelve True (sí), False (no) o None (no está claro)."""
-        base = unicodedata.normalize("NFD", (text or "").lower())
-        n = "".join(c for c in base if unicodedata.category(c) != "Mn")
-        n = re.sub(r"[^a-z0-9 ]", " ", n)
-        n = re.sub(r"\s+", " ", n).strip()
-        if not n:
-            return None
-        tokens = n.split()
-        # Incertidumbre explícita: no la tomamos como "no", volvemos a preguntar.
-        if n in ("no se", "no lo se", "ni idea", "quiza", "quizas", "tal vez") \
-                or n.startswith("no estoy segur"):
-            return None
-        no_frases = ("mejor no", "no lo hagas", "no quiero", "para nada", "ni se te ocurra")
-        si_frases = ("de acuerdo", "por supuesto", "esta bien", "hazlo ya", "adelante con eso")
-        no_palabras = {"no", "nel", "negativo", "cancela", "cancelar", "detente",
-                       "dejalo", "olvidalo", "nop", "nope"}
-        si_palabras = {"si", "sii", "sisi", "claro", "dale", "hazlo", "adelante",
-                       "confirmo", "confirmado", "correcto", "vale", "ok", "okay",
-                       "afirmativo", "sip", "hagalo", "procede", "eso"}
-        # La negación tiene prioridad (más seguro ante ambigüedad).
-        if any(f in n for f in no_frases) or (no_palabras & set(tokens)):
-            return False
-        if any(f in n for f in si_frases) or (si_palabras & set(tokens)):
-            return True
-        return None
-
     # ---------- iniciativa automática ----------
     def _toggle_autonomy(self):
         enabled = self.autonomy.toggle()
@@ -3744,7 +3461,7 @@ class Controller(QObject):
             self._yue_say("Iniciativa automática pausada.")
 
     def _autonomous_create(self):
-        if self._autonomy_busy or self._pc_busy or self._vision_busy:
+        if self._autonomy_busy or self.controller_ctx.pc_busy or self._vision_busy:
             return
         if not self.autonomy.can_create() or self.chat.is_user_composing():
             return
@@ -3806,13 +3523,13 @@ class Controller(QObject):
             self.chat.set_status("")
             self._yue_say("Me detuve. Te escucho.")
         elif action == "pc_undo":
-            self._undo_last_pc()
+            self.pc_director.undo_last_pc()
         elif action == "pc_repeat":
-            self._repeat_last_pc()
+            self.pc_director.repeat_last_pc()
         elif action == "routine_save":
             self._save_routine(commands.routine_name(arg))
         elif action == "routine_run":
-            self._run_routine(commands.routine_name(arg))
+            self.pc_director.run_routine(commands.routine_name(arg))
         elif action == "routine_list":
             self._list_routines()
         elif action == "activity_summary":
@@ -4058,7 +3775,7 @@ class Controller(QObject):
                     "Cuéntame cómo estás, o usa /animo para dejarme una nota del 1 al 5."
                 )
         elif command == "/pc" and arg:
-            self._run_pc_order(arg)
+            self.pc_director.run_pc_order(arg)
         elif command == "/mira":
             self._glance()
         elif command in {"/diagvision", "/diagnosticovision", "/diagvisión"}:
