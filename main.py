@@ -28,6 +28,7 @@ from core.memory import Memory
 from core import bonding, personality, safety, screen_capture as vision, emotion, commands, activity
 from core import memory_consolidation
 from core.camera_observer import CameraObserver, CameraObservation
+from contracts.vision_host import VisionHost
 
 # NUEVO (arbitraje del avatar): prioridades con las que cada subsistema pide la
 # cara de YUE. Se resuelven contra core.state.Priority; si el gestor de estado
@@ -59,6 +60,61 @@ _CAMARA_VA = {
     "fear": (-0.6, 0.8), "surprise": (0.15, 0.8), "disgust": (-0.5, 0.5),
     "tired": (-0.35, 0.15), "neutral": (0.0, 0.3),
 }
+
+
+class VisionHostAdapter(VisionHost):
+    """Adapta la app (Controller) al contrato VisionHost para vision/integration.
+
+    PR 4: implementa formalmente los 4 miembros del contrato delegando en el
+    gestor de estado y reenvía por __getattr__ el RESTO de la superficie
+    duck-typed que vision/integration.py sigue usando (can_speak/can_animate y
+    callbacks): chat, teacher, pet, _yue_say, _on_vision_status,
+    observe_emotion, flags _*_busy, _yue_may_take_initiative.
+
+    NOTA (REFACTOR_SPEC §4.1 fila 5): cuando VisionDirector se extraiga en
+    PR 5, esas dependencias deben llegarle vía controller_ctx (patrón
+    WorkerRegistry), NO heredando este __getattr__ hacia el Controller.
+    """
+
+    def __init__(self, controller):
+        self._controller = controller
+
+    def request_emotion(self, name: str, intensity: float, duration_ms: int,
+                        priority: int, source: str) -> None:
+        gestor = getattr(self._controller, "state_manager", None)
+        if gestor is not None:
+            gestor.request_emotion(str(name), float(intensity), int(duration_ms),
+                                   priority=int(priority), source=str(source or "vision"))
+
+    def emotion_would_win(self, priority: int) -> bool:
+        gestor = getattr(self._controller, "state_manager", None)
+        if gestor is None:
+            return False  # prudente: sin gestor la visión no propone
+        try:
+            return bool(gestor.would_win(int(priority), "vision"))
+        except Exception:
+            return False
+
+    @property
+    def media_playing(self) -> bool:
+        audio = getattr(self._controller, "audio", None)
+        try:
+            return bool(getattr(audio, "media_playing", False))
+        except Exception:
+            return False
+
+    @property
+    def is_speaking(self) -> bool:
+        speaker = getattr(self._controller, "speaker", None)
+        try:
+            return bool(getattr(speaker, "is_speaking", False))
+        except Exception:
+            return False
+
+    def __getattr__(self, nombre):
+        # Puente formal: el resto del duck-typing de vision/integration.py se
+        # resuelve contra el Controller real (getattr(..., None) lo absorbe).
+        return getattr(self._controller, nombre)
 
 
 def _valencia_activacion_camara(clave):
@@ -812,7 +868,7 @@ class Controller(QObject):
         # clásico o una CAMERA_INDEX distinta para no pelear por la misma webcam.
         try:
             from vision import integration as vision_mp
-            self.vision_mp = vision_mp.attach(self)
+            self.vision_mp = vision_mp.attach(VisionHostAdapter(self))
         except Exception as exc:
             print("[vision-mp] no se pudo enganchar el sistema de visión:", exc)
             self.vision_mp = None

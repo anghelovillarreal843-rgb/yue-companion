@@ -265,6 +265,29 @@ handlers de eventos Qt breves. `main()` queda solo como bootstrap.
 | 8 | **Autonomía** `_toggle_autonomy`, `_autonomous_create`, `_on_autonomy_done`, `_on_autonomy_failed`, `_run_internal_action`, `_set_head_control` | `engine/autonomy_director.py` · `AutonomyDirector` | Creación autónoma + acciones internas |
 | 9 | **Emoción/avatar/estado** `_set_avatar_emotion`, `_publish_companion_state`, `_state_tick`, `_sync_system_state`, `_refresh_bond`, `_update_mode_indicator`, `debug_state` | `engine/emotion_orchestrator.py` · `EmotionOrchestrator` | Estado del companion |
 
+**NOTA — superficie duck-typed del `VisionHostAdapter` (PR 4, relevante para fila 5):**
+`VisionHostAdapter` (en `main.py`, PR 4) implementa formalmente `contracts.VisionHost`
+(`request_emotion`, `emotion_would_win`, `media_playing`, `is_speaking`) y REENVÍA por
+`__getattr__` hacia el `Controller` todo lo demás que `vision/integration.py` sigue tocando
+hoy con duck-typing. Superficie exacta que hoy resuelve ese `__getattr__`:
+
+- `chat.is_user_composing` (can_speak)
+- `teacher.is_active` (can_speak)
+- `_yue_may_take_initiative(level)` (can_speak)
+- `pet.play_gesture(name, gain)` (gestos aditivos del avatar)
+- `_yue_say(text)` (frases opcionales) y `_on_vision_status(text, active)`
+- `state_manager.observe_emotion(source, emotion, confidence, ...)` (evidencia del sensor)
+- flags `_pc_busy` / `_vision_busy` / `_autonomy_busy` (can_speak y can_animate)
+- (adicionales del contrato: `audio.media_playing`, `speaker.is_speaking` se cubren vía las
+  propiedades `media_playing`/`is_speaking` del adapter; `state_manager.would_win`/`request_emotion`
+  vía los dos métodos del contrato)
+
+**REQUISITO para PR 5 (fila 5, `VisionDirector`):** cuando el director de visión se extraiga,
+estas dependencias deben recibirse vía `controller_ctx` (mismo patrón que `WorkerRegistry`:
+service-locator compartido, ver decisión de `_yue_may_take_initiative` arriba) y NO heredando el
+`__getattr__` hacia el `Controller`. El `VisionHostAdapter` se mantiene como el puente formal
+app→vision (el director CONSUME el host, no lo implementa re-enviando al Controller).
+
 **Infraestructura compartida — `_track_worker` (decisión cerrada):** `_track_worker`
 (main.py:4277) es infraestructura pura y compartida: registra el worker, lo lanza y lo
 desregistra al terminar (`worker.finished → remove`). La usan ~10 call sites repartidos entre
@@ -463,6 +486,25 @@ Contenido: crear `contracts/` (`VisionHost`, `OCRPort`), adaptar `vision/integra
 Contenido: `VisionHostAdapter` en `main.py`; `YueStateManager` provee `request_emotion/would_win`;
 `main.py` deja de importar `core.state.Priority` en `vision` (se usa `VisionHost.EMOTION_PRIORITY`).
 - **Verificar:** mismo set que PR 3 + prueba manual de emoción por rostro con cámara.
+
+**ESTADO EJECUTADO (branch `refactor/arquitectura`):**
+- `VisionHostAdapter` creado en `main.py` (¡punto de anclaje de la nota §4.1 fila 5!): implementa
+  `contracts.VisionHost` delegando en el `Controller` (gestor de estado para `request_emotion`/
+  `emotion_would_win`; `audio.media_playing`/`speaker.is_speaking` para las propiedades; sin gestor
+  → prudente `False`) y reenvía por `__getattr__` la superficie duck-typed restante:
+  `chat.is_user_composing`, `teacher.is_active`, `_yue_may_take_initiative`, `pet.play_gesture`,
+  `_yue_say`, `_on_vision_status`, `state_manager.observe_emotion`, flags `_pc_busy`/`_vision_busy`/
+  `_autonomy_busy`. `main.py` pasa `attach(VisionHostAdapter(self))` al bloque visión MP.
+- `YueStateManager` verificó ser el proveedor del contrato (`request_emotion` state_manager.py:176,
+  `observe_emotion` :264, `would_win` :339) — sin cambios.
+- `core.state.Priority` solo persiste en `main.py:1031` dentro de `_set_avatar_emotion` (camino de
+  propuesta del avatar, NO visión) → se documenta y no se toca. `EMOTION_PRIORITY` ya vive en
+  `contracts/vision_host.py` desde PR 3.
+- **Verificación (Linux):** prueba sintética del adapter contra un `Controller()` real → los 4
+  miembros OK, `__getattr__` alcanza chat/state_manager/speaker/flags, `attach(adapter)` sin error,
+  `shutdown()` limpio; arranque con `VISION_MP_ENABLED=true` (degradado) OK; gate `test_arch_deps`
+  + `test_core` verdes; suite completa `603 passed · 7 failed (los MISMO pre-existentes) ·
+  1 skipped · 39 warnings`. Manual `[manual-Windows]` pendiente: emoción por rostro con cámara real.
 
 ### PR 5 — Desglose de `Controller` (D4) — 11 commits, uno por paso de §4.2
 Contenido: extraer en el orden de §4.2 (commits 5.1…5.11; cada commit = 1 paso).
