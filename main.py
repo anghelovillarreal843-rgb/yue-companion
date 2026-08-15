@@ -816,6 +816,16 @@ class Controller(QObject):
         except Exception as exc:
             print("[vision-mp] no se pudo enganchar el sistema de visión:", exc)
             self.vision_mp = None
+        # PR 3: composición del OCRPort. core/screen_ocr ya no importa vision;
+        # la fábrica del port (OCREngineChain implementa contracts.OCRPort) se
+        # registra aquí para que el diagnóstico y la lectura de cámara funcionen
+        # igual que antes sin el ciclo de imports.
+        try:
+            from core import screen_ocr
+            from vision.ocr.ocr_engine import OCREngineChain
+            screen_ocr.set_ocr_port_factory(OCREngineChain)
+        except Exception as exc:
+            print("[vision] no se pudo componer el OCRPort:", exc)
 
         # ADITIVO (migración, punto 16 del pedido): con VISION_REPLACE_LEGACY=true
         # el `CameraObserver` clásico se sustituye por un ADAPTADOR que expone la

@@ -428,6 +428,37 @@ Contenido: crear `contracts/` (`VisionHost`, `OCRPort`), adaptar `vision/integra
 - **Verificar:** `python -m pytest tests/test_arch_dependencies.py -v` (verde) +
   `python -m pytest -q` + arranque con visión activa y con visión apagada.
 
+**ESTADO EJECUTADO (branch `refactor/arquitectura`):**
+- `contracts/` creado (capa neutra, no importa nada del proyecto): `vision_host.py`
+  (`VisionHost` con `request_emotion`, `emotion_would_win`, `media_playing`, `is_speaking` y
+  `EMOTION_PRIORITY=60` congelado, equivalente a `core.state.Priority.EMOTION`),
+  `ocr_port.py` (`OCRPort`).
+- **Ajuste al contrato vs. §2.3 (registrado):** `OCRPort` lleva además `available` y
+  `engine_name` (API pública de diagnóstico que `screen_ocr` usa); y la inyección se hace por
+  **fábrica**: `screen_ocr.set_ocr_port_factory(OCREngineChain)` desde `main.py` (composición),
+  preservando la construcción lazy con los configs de siempre; sin fábrica registrada, `_cadena`
+  degrada (mismas garantías que sin motores instalados).
+- Ciclo roto en los 3 puntos:
+  - `vision/integration.py`: `from core.state import Priority` ×2 → `VisionHost.EMOTION_PRIORITY`;
+    `attach(host: VisionHost)` tipado (duck-typing preservado a propósito, sin `isinstance`,
+    para no romper el arranque actual; el `VisionHostAdapter` de `main.py` llega en PR 4).
+  - `vision/ocr/ocr_engine.py`: `from core.screen_text import TesseractEngine` → helper puro
+    `_resolver_binario_tesseract()` (misma semántica de `_buscar_binario`, sin importar core);
+    `OCREngineChain` ahora implementa `contracts.OCRPort` (`recognize`/`available`/`engine_name`).
+  - `core/screen_ocr.py`: `from vision.ocr.ocr_engine import OCREngineChain` eliminado; consume
+    el port por fábrica inyectada. `main.py` registra la fábrica en el arranque (bloque visión MP).
+- **Gate activado y reforzado** (`tests/test_arch_dependencies.py` reescrito): doble detección
+  (AST estático → ve los imports lazy; subprocess Python limpio → mide lo cargado de verdad).
+  **Prueba de fuerza:** copiado sobre `main` el gate falla listando exactamente las 3 violaciones
+  (`integration→core`, `ocr_engine→core`, `screen_ocr→vision`); sobre la rama pasa (2 passed).
+  `test_core_no_importa_exogenos` (voice_flow/teacher/ui, invariante §1) queda SKIP hasta PR 5:
+  hoy lista `core/listener.py` y `core/screen_vision.py` (cierres aplazados al desglose de
+  Controller); **TODO: activarlo en PR 5** (ver §PR6).
+- **Verificación (Linux):** gate `2 passed · 1 skipped`; suite completa `603 passed · 7 failed
+  (los MISMO pre-existentes) · 1 skipped · 39 warnings`; arranque `Controller()+shutdown()` con
+  `VISION_MP_ENABLED=true` (degradado, cámara off) y OCR compuesto vía fábrica OK. Manual
+  `[manual-Windows]` pendiente: visión MP real con cámara.
+
 ### PR 4 — Extender la arquitectura-emoción a host (pegado con PR 3)
 Contenido: `VisionHostAdapter` en `main.py`; `YueStateManager` provee `request_emotion/would_win`;
 `main.py` deja de importar `core.state.Priority` en `vision` (se usa `VisionHost.EMOTION_PRIORITY`).
@@ -443,6 +474,25 @@ Contenido: extraer en el orden de §4.2 (commits 5.1…5.11; cada commit = 1 pas
 Contenido: borrar `core/desktop_ui.py` ya vacío de referencias, docstrings nuevos en `contracts/`,
 actualizar `AUDITORIA_ARQUITECTURA.md` (sección "acoplamientos") y este spec a "implementado".
 - **Verificar:** suite + ejecución manual de arranque + `git grep desktop_ui` devuelve solo `platforms/`.
+
+**TODO CHECKLIST de limpieza (para NO olvidar en PR 6):**
+
+1. **Re-exports temporales de PR 2** — eliminar cuando los consumidores estén migrados:
+   - `core/desktop_ui.py` → re-export de `platforms/windows/desktop_ui.py` (incluye el privado
+     `_active_title_win32` que usa `tests/test_desktop_ui_smoke.py`). Consumidores pendientes:
+     `core/screen_vision.py:188`, `tests/test_mejoras.py:153`, `tests/diagnostico_pc.py`,
+     `tests/test_jarvis_control.py:19`, `tests/test_ordenes_dificiles.py:175`.
+   - `core/office_control.py` → re-export de `platforms/windows/office.py`. Consumidor
+     pendiente: `core/pc_control.py:28` (OfficeController/OfficeUnavailable/OfficeError) —
+     migrar el consumo de office al `PlatformController` (decisión PR 2: office se re-rutea
+     en PR 5, no quedó en el contrato).
+2. **Gate `test_core_no_importa_exogenos`** — PR 3 lo dejó SKIP (razón: `core/listener.py:18`
+   importa `voice_flow.BargeInGate` y `core/screen_vision.py:197` importa `teacher.documents`):
+   cerrar esos 2 imports y ACTIVAR el test en PR 5 (invariante §1 completa).
+3. **VisionHostAdapter** — PR 4 lo introduce en `main.py`; confirmar que `Controller` cumple
+   `VisionHost` y que `attach(host)` deja de depender del duck-typing.
+4. `contracts/__init__.py` ya exporta `VisionHost`/`OCRPort`; al final revisar que no queden
+   imports sueltos de `contracts` desde `core/` con el prefijo equivocado.
 
 > **Rollback:** si un PR rompe la suite, revertir ese PR únicamente (los anteriores son ortogonales).
 

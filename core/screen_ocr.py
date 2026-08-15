@@ -19,8 +19,22 @@ from __future__ import annotations
 
 import time
 
-_cadena_camara = None      # instancia cacheada de OCREngineChain
+_cadena_camara = None      # instancia cacheada del OCRPort
 _cadena_probada = False
+_port_factory = None       # fábrica del OCRPort (la registra la composición, main.py)
+
+
+def set_ocr_port_factory(factory) -> None:
+    """Registra la fábrica del OCRPort (contracts.OCRPort) en composición.
+
+    PR 3: core deja de importar vision; main.py registra aquí la clase
+    vision.ocr.ocr_engine.OCREngineChain (que implementa OCRPort) y
+    screen_ocr la instancia con su configuración de siempre. Sin fábrica
+    registrada, la cadena de cámara queda degradada (same behavior que sin
+    motores instalados).
+    """
+    global _port_factory
+    _port_factory = factory
 
 
 def _config(nombre, defecto):
@@ -51,16 +65,20 @@ def _leer_con_tesseract(image) -> str:
 
 # ------------------------------------- motor 2: cadena de la camara (paddle/easy)
 def _cadena() :
-    """Instancia unica de la cadena PaddleOCR -> EasyOCR -> Tesseract."""
+    """Instancia unica del OCRPort (cámara paddle/easy/tesseract)."""
     global _cadena_camara, _cadena_probada
     if _cadena_probada:
         return _cadena_camara
     _cadena_probada = True
+    if _port_factory is None:
+        print("[VISION] OCR de cámara no disponible: no hay OCRPort registrado "
+              "(main.py compuso la fábrica). Queda solo tesseract de pantalla.")
+        _cadena_camara = None
+        return None
     try:
-        from vision.ocr.ocr_engine import OCREngineChain
         idiomas = str(_config("VISION_OCR_LANGUAGES", "es") or "es")
         langs = tuple(x.strip().lower() for x in idiomas.split(",") if x.strip()) or ("es",)
-        _cadena_camara = OCREngineChain(
+        _cadena_camara = _port_factory(
             languages=langs,
             preferred=str(_config("VISION_OCR_ENGINE", "auto") or "auto"),
             min_confidence=float(_config("VISION_OCR_MIN_CONFIDENCE", 0.35) or 0.35),

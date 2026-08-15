@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from contracts.ocr_port import OCRPort
+
 log = logging.getLogger("vision.ocr")
 
 
@@ -155,6 +157,34 @@ class EasyOCREngine(BaseOCR):
         return blocks
 
 
+def _resolver_binario_tesseract() -> str:
+    """Busca tesseract.exe donde suele instalarlo el paquete de UB-Mannheim.
+
+    Réplica pura de `core.screen_text.TesseractEngine._buscar_binario`
+    (PR 3: vision/ dejó de importar core). winget instala el binario pero
+    NO refresca el PATH de la sesión abierta; así evitamos que el usuario
+    tenga que configurar nada.
+    """
+    import shutil
+    from pathlib import Path
+
+    encontrado = shutil.which("tesseract")
+    if encontrado:
+        return encontrado
+    candidatos = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%ProgramW6432%\Tesseract-OCR\tesseract.exe"),
+    ]
+    for ruta in candidatos:
+        if ruta and Path(ruta).is_file():
+            print(f"[ocr] tesseract encontrado fuera del PATH: {ruta}")
+            return ruta
+    return os.environ.get("OCR_TESSERACT_CMD", "")
+
+
 class TesseractOCREngine(BaseOCR):
     """Respaldo: ya viene en las dependencias de YUE para el OCR de pantalla."""
 
@@ -165,10 +195,11 @@ class TesseractOCREngine(BaseOCR):
             return self._impl
         try:
             import pytesseract
-            # Reutiliza la ruta que YUE ya resuelve para el OCR de pantalla.
+            # La ruta del binario se resuelve con el helper puro de este paquete
+            # (PR 3: vision ya no importa core; la semántica de _buscar_binario
+            # de screen_text se replicó aquí, sin dependencia externa).
             try:
-                from core.screen_text import TesseractEngine as _ScreenTess
-                ruta = _ScreenTess._buscar_binario()
+                ruta = _resolver_binario_tesseract()
                 if ruta:
                     pytesseract.pytesseract.tesseract_cmd = ruta
             except Exception:
@@ -291,7 +322,7 @@ class OCRResult:
         return bool(self.text.strip())
 
 
-class OCREngineChain:
+class OCREngineChain(OCRPort):
     """Elige el mejor motor disponible y expone una API única."""
 
     def __init__(self, languages: tuple[str, ...] = ("es",), preferred: str = "auto",
@@ -331,6 +362,12 @@ class OCREngineChain:
     @property
     def engine_name(self) -> str:
         return self.engine().name
+
+    # ------------------------------------------------------------------
+    # OCRPort (contracts/): el port que core/screen_ocr consume por inyección.
+    def recognize(self, image, *, lang: str = "spa") -> str:
+        result = self.read(image, language=lang)
+        return str(getattr(result, "text", "") or "").strip()
 
     # ------------------------------------------------------------------
     def read(self, image, region: list | None = None, language: str | None = None) -> OCRResult:
