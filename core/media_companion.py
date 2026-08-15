@@ -467,15 +467,9 @@ def detect_media_source() -> MediaSource:
 
     if _is_windows():
         try:
-            import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
-            pid = ctypes.c_ulong()
-            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            try:
-                import psutil
-                process = psutil.Process(pid.value).name().lower()
-            except Exception:
-                process = ""
+            from platforms import get_platform_controller
+            _titulo_fg, _proceso_fg = get_platform_controller().foreground_app()
+            process = process or _proceso_fg
         except Exception:
             pass
 

@@ -21,7 +21,7 @@ de extensión está definido y verificado con un `NotImplementedError` controlad
 | # | Decisión | Razonamiento |
 |---|----------|--------------|
 | D1 | `vision` NO importa `core.*`. Se crea paquete neutro `contracts/` con `VisionHost` y `OCRPort`. | La auditoría detecta ciclo funcional `core ↔ vision`. Romperlo exige que el contrato viva fuera de `core` (si viviera en `core`, `vision` seguiría importando `core`). |
-| D2 | La capa de abstracción de plataforma vive en `platform/` (interfaz) + `platform/windows/` (implementación actual) + `platform/linux/` (stub). | Linux es objetivo declarado de compatibilidad; mover el código Win32 hoy a un único sitio con fábrica `sys.platform` es el cambio más aislado y reversible del refactor. |
+| D2 | La capa de abstracción de plataforma vive en `platforms/` (interfaz) + `platforms/windows/` (implementación actual) + `platforms/linux/` (stub). | Linux es objetivo declarado de compatibilidad; mover el código Win32 hoy a un único sitio con fábrica `sys.platform` es el cambio más aislado y reversible del refactor. |
 | D3 | `PCController` conserva PyAutoGUI (cross-platform) pero recibe `PlatformController` por inyección para toda operación Win32 (elementos, ventanas, office). | `pc_control` usa `desktop_ui` a nivel de módulo (línea 26); inyectar el controlador elimina esa dependencia estática y permite testear sin hardware. |
 | D4 | `Controller` (main.py) se desglosa en 9 directores nuevos bajo `engine/` + la utilidad base `WorkerRegistry`, en orden de extracción con verificación tras cada paso. | La auditoría marca `Controller` (~3800 líneas) como mayor riesgo; extraer por responsabilidad única permite smoke-test cada extracción. |
 | D5 | Orden de PRs: tests base → plataforma → ciclo core↔vision → desglose de Controller (de lo más aislado a lo más riesgoso). | Piramide de riesgo de la auditoría §5: tocar plataforma/ventanas sin tests es lo más peligroso; se cubre primero. |
@@ -43,7 +43,7 @@ yue-companion/
 │   ├── __init__.py
 │   ├── vision_host.py       # D1: VisionHost (contrato que la app expone a vision)
 │   └── ocr_port.py          # D1: OCRPort (contrato que core necesita para OCR)
-├── platform/                # NUEVO — abstracción de sistema operativo (§3)
+├── platforms/                # NUEVO — abstracción de sistema operativo (§3)
 │   ├── __init__.py          # fábrica get_platform_controller() -> PlatformController
 │   ├── contracts.py         # PlatformController (ABC) + dataclasses de resultados
 │   ├── windows/             # implementación REAL (código actual movido):
@@ -72,7 +72,7 @@ yue-companion/
 │   ├── screen_ocr.py        # pierde import de vision*; usa OCRPort inyectado (D1)
 │   ├── screen_observation.py# pierde parte win32 → usa PlatformController.foreground_app()
 │   ├── pc_control.py        # recibe PlatformController por inyección (D3); sin imports platform
-│   ├── desktop_ui.py        # re-export temporal de platform/windows/desktop_ui.py (PR2→PR6)
+│   ├── desktop_ui.py        # re-export temporal de platforms/windows/desktop_ui.py (PR2→PR6)
 │   └── listener.py          # pierde import de voice_flow → BargeInGate inyectado (PR5)
 └── vision/                  # se mantiene; pierde imports de core.* (D1)
     └── integration.py       # usa VisionHost inyectado en attach(host)
@@ -82,7 +82,7 @@ yue-companion/
 
 1. `core/*` nunca importa `vision`, `teacher`, `voice_flow` ni `ui` (solo `contracts`, `config` y `core/*`). → hoy se viola en `core/screen_ocr.py` (vision), `core/listener.py` (voice_flow), `core/screen_vision.py` (teacher+desktop_ui); el spec los cierra en PR2/PR3/PR5.
 2. `vision/*` nunca importa `core` ni `main` (solo `contracts`). → hoy se viola en `vision/integration.py`; se cierra en PR3/PR4.
-3. Todo código que toque sistema operativo vive bajo `platform/` y solo se consume **inyectado**.
+3. Todo código que toque sistema operativo vive bajo `platforms/` y solo se consume **inyectado**.
 4. `main.py` y `engine/` son los únicos lugares que conectan módulos entre sí (composición).
 5. `config.py` mantiene su contrato público actual; no se mueven claves ni constantes.
 
@@ -162,9 +162,9 @@ class OCRPort(ABC):
 
 ## 3. CAPA DE ABSTRACCIÓN DE PLATAFORMA
 
-**Decisión cerrada:** interfaz `PlatformController` en `platform/contracts.py`; implementación
-Windows real en `platform/windows/` (código actual movido sin cambios de lógica); punto de
-extensión documentado para Linux con `platform/linux/` (stub `NotImplementedError`).
+**Decisión cerrada:** interfaz `PlatformController` en `platforms/contracts.py`; implementación
+Windows real en `platforms/windows/` (código actual movido sin cambios de lógica); punto de
+extensión documentado para Linux con `platforms/linux/` (stub `NotImplementedError`).
 
 ### 3.1 Interfaz `PlatformController` (ABC)
 
@@ -209,27 +209,27 @@ class PlatformController(ABC):
 Se respeta el **degradado elegante**: una implementación que no soporte una operación devuelve
 `None`/`[]`/bool-`False` (igual que hoy), nunca lanza. `LinuxController` (stub) hereda el default
 degradado y **solo levanta `NotImplementedError` si alguien intenta usarlo en producción**
-(movido a `platform/linux/__init__.py` con mensaje: `"YUE: control de plataforma Linux no implementado aún."`).
+(movido a `platforms/linux/__init__.py` con mensaje: `"YUE: control de plataforma Linux no implementado aún."`).
 
 ### 3.2 Asignación concreta de dónde va cada código actual
 
 | Código actual | Va a | Extra |
 |---------------|------|-------|
-| `core/desktop_ui.py` (todo, ~796 líneas) | `platform/windows/desktop_ui.py` | En PR2 se crea la copia nueva y `core/desktop_ui.py` queda como **re-export fino temporal** (`from platform.windows.desktop_ui import *`) para no romper `core/screen_vision.py:188`, `tests/test_mejoras.py:153`, `tests/diagnostico_pc.py`, `tests/test_jarvis_control.py:19`, `tests/test_ordenes_dificiles.py:175`; los consumidores se migran a `PlatformController` y el re-export se borra en PR6. |
-| `core/office_control.py` (clase `OfficeController`, errores) | `platform/windows/office.py` (misma clase, mismo API público) | `core` deja de importarlo; `main.py`/`engine` inyectan. |
-| `detect_media_source()` + helpers win32 de `core/media_companion.py` | `platform/windows/media_source.py` | La parte psutil/now_playing cross-platform se queda en `core/media_companion.py`; solo ventana/proceso va a `platform`. |
-| Parte win32 de `core/screen_observation.py` (líneas 208-212) | `platform/windows/windows_utils.py` | `screen_observation` usa `PlatformController.foreground_app()`. |
-| `main.py::enable_dpi_awareness` (líneas 7-25) | `platform/windows/dpi.py` | `main()` llama `get_platform_controller().set_dpi_awareness()`. |
+| `core/desktop_ui.py` (todo, ~796 líneas) | `platforms/windows/desktop_ui.py` | En PR2 se crea la copia nueva y `core/desktop_ui.py` queda como **re-export fino temporal** (`from platform.windows.desktop_ui import *`) para no romper `core/screen_vision.py:188`, `tests/test_mejoras.py:153`, `tests/diagnostico_pc.py`, `tests/test_jarvis_control.py:19`, `tests/test_ordenes_dificiles.py:175`; los consumidores se migran a `PlatformController` y el re-export se borra en PR6. |
+| `core/office_control.py` (clase `OfficeController`, errores) | `platforms/windows/office.py` (misma clase, mismo API público) | `core` deja de importarlo; `main.py`/`engine` inyectan. |
+| `detect_media_source()` + helpers win32 de `core/media_companion.py` | `platforms/windows/media_source.py` | La parte psutil/now_playing cross-platform se queda en `core/media_companion.py`; solo ventana/proceso va a `platform`. |
+| Parte win32 de `core/screen_observation.py` (líneas 208-212) | `platforms/windows/windows_utils.py` | `screen_observation` usa `PlatformController.foreground_app()`. |
+| `main.py::enable_dpi_awareness` (líneas 7-25) | `platforms/windows/dpi.py` | `main()` llama `get_platform_controller().set_dpi_awareness()`. |
 | `core/app_catalog.py` (lanzar/registrar, `os.startfile`) | implementado sobre `PlatformController.launch_app` | `AppCatalog` recibe el controlador inyectado. |
 
 ### 3.3 Fábrica y selección
 
-`platform/__init__.py`:
+`platforms/__init__.py`:
 
 ```python
 def get_platform_controller() -> PlatformController:
     if platform.system().lower() == "windows":
-        return WindowsPlatformController()          # platform/windows/__init__.py
+        return WindowsPlatformController()          # platforms/windows/__init__.py
     if platform.system().lower() == "linux":
         return LinuxController()                    # stub, degradado (sin lanzar)
     return NullPlatformController()                 # degradado genérico para el resto
@@ -241,7 +241,7 @@ Con esto, **todas** las ramas `if sys.platform == ...` que la auditoría listó 
 `core/system_audio.py` y `core/screen_observation.py` consultan `platform_controller.is_available()`
 en vez de comparar SO a mano.
 
-**Nota para ocultar el placeholder:** `platform/linux/` queda como stub *deliberado*, documentado
+**Nota para ocultar el placeholder:** `platforms/linux/` queda como stub *deliberado*, documentado
 en la docstring del módulo como "extensión futura recomendada" — no como dependencia faltante.
 
 ---
@@ -366,13 +366,61 @@ apagado o con `pytest.mark.skip`) + correr la suite actual para fijar estado ver
   `test_system_audio_smoke`, `test_voice_listener_smoke`.
 - Para ejecutar el gate del PR en adelante: `python -m pytest -q`.
 
-### PR 2 — Abstracción de plataforma (mover a `platform/`, D2/D3)
-Contenido: crear `platform/` (fábrica + `win32` + stub linux), mover `desktop_ui`, `office`,
+**ESTADO EJECUTADO (branch `refactor/arquitectura`):**
+
+### PR 2 — Abstracción de plataforma (mover a `platforms/`, D2/D3)
+Contenido: crear `platforms/` (fábrica + `win32` + stub linux), mover `desktop_ui`, `office`,
 `media_source`, `dpi`; re-escribir los `import desktop_ui`/`office_control` como inyección en
 `pc_control`/`app_catalog`/`main` con `get_platform_controller()`. **Todo degradado intacto.**
 - **Verificar:** `python -m pytest -q` (verde, sin tests nuevos) + `python main.py` en Windows:
   listar/enfocar/cerrar ventana, office open/save/read, detectar fuente media, click-through.
   En Linux: arranca, `is_available()` False, no lanza.
+
+**ESTADO EJECUTADO (branch `refactor/arquitectura`):**
+- **Paquete renombrado a `platforms/` (plural)** — el nombre `platform/` ensombrecía al módulo
+  stdlib `platform` (mismo `sys.path[0]`), rompiendo `import platform` en todo el código. La
+  clase/contrato mantiene el nombre `PlatformController`; solo cambia el directorio.
+- Estructura creada: `platforms/__init__.py` (factory lazy `get_platform_controller()` con
+  singleton), `platforms/contracts.py` (`PlatformController` ABC + `DegradedController` con
+  todos los degradados seguros, nunca lanza), `platforms/windows/` (`desktop_ui.py`,
+  `office.py` — copias verbatim; `dpi.py` desde `main.py`; `media_source.py` con el bloque
+  GetForegroundWindow), `platforms/linux/__init__.py` (`LinuxController(DegradedController)`,
+  stub de extensión futura; `raise_if_production()` documenta el punto de extensión).
+- **Ajuste al contrato vs. §3.1:** se eliminaron `office_open/read/save/write` de la interfaz
+  (el API real de `OfficeController` no encaja y su re-ruteo queda para PR 5); se agregaron
+  las helpers puras `norm/similarity/describe_windows` (independientes del SO, viven en
+  `contracts.py` con copia canónica e idéntica semántica, expuestas por el controlador para
+  que `pc_control` no importe `desktop_ui`). `launch_app` se implementó como primitiva en
+  Windows (`os.startfile`/`Popen`) y degradado `""` en Linux; `app_catalog` NO se reescribió
+  en este PR (fuera del alcance pedido; queda para PR 5).
+- **Re-wiring:** `main.py` usa `get_platform_controller().set_dpi_awareness()` (bloque DPI
+  movido a `platforms/windows/dpi.py`); `pc_control.py` recibe `PlatformController` por
+  inyección (`PCController(platform_controller=None)`), eliminó su import de `desktop_ui` y
+  consume `self.platform.*` (42 call-sites); `media_companion` y `screen_observation`
+  consumen `foreground_app()` (el bloque ctypes se fue a `platforms/windows/media_source.py`).
+  SSR: `pc_control` sigue importando `OfficeController` vía re-export temporal de
+  `core/office_control.py` (ver decisión office arriba); `_desktop_available` en
+  `core/agent/verification.py` migró su duck-typing a `is_available` (sin esto, la
+  verificación esperaba ventanas en modo degradado).
+- `core/desktop_ui.py` y `core/office_control.py` quedaron como re-export fino
+  (`from platforms.windows.X import *` y el privado `_active_title_win32` que usa el smoke
+  test). Sin regresión para `screen_vision`, `test_mejoras`, `diagnostico_pc` y los tests
+  script-style.
+- Smoke test nuevo `tests/test_platform_controller_smoke.py` (factory en Linux → `LinuxController`,
+  degradados seguros, helpers puras, dpi/launch no lanzan).
+- **Verificación (Linux, `python -m pytest -q`): 601 passed · 7 failed (los MISMO pre-existentes) ·
+  2 skipped · 39 warnings.** Arranque real: `Controller()` + `shutdown()` completos con
+  `LinuxController` activo. Manual `[manual-Windows]` pendiente: listar/enfocar/cerrar ventana,
+  office open/save/read, click-through, fuentes de media.
+
+**NOTA de verificabilidad (levantada durante la ejecución de PR 1, probado en la máquina Linux
+del dev):** `main()` YA arranca en Linux hoy en modo degradado (`Controller()` + `shutdown()`
+completos; voz/TTS, micrófono y MediaPipe degradan solos). Tras PR 2, con `platforms/linux/`
+stub, eso se mantiene. Las verificaciones manuales de §4.2 se dividen así en esta máquina:
+**verificables en Linux** = chat de texto, memoria proactiva/check-ins, `DiálogoDirector`,
+arranque/cierre sin hilos huérfanos; **solo Windows** (marcar como `[manual-Windows]`) = voz
+real, control real de PC (pyautogui/pywinauto), emociones por cámara (mediapipe), office/PDF
+con UI real.
 
 ### PR 3 — Romper ciclo `core ↔ vision` (D1)
 Contenido: crear `contracts/` (`VisionHost`, `OCRPort`), adaptar `vision/integration.py` a
@@ -394,7 +442,7 @@ Contenido: extraer en el orden de §4.2 (commits 5.1…5.11; cada commit = 1 pas
 ### PR 6 — Limpieza post-refactor (fuera de alcance de decisión, citado)
 Contenido: borrar `core/desktop_ui.py` ya vacío de referencias, docstrings nuevos en `contracts/`,
 actualizar `AUDITORIA_ARQUITECTURA.md` (sección "acoplamientos") y este spec a "implementado".
-- **Verificar:** suite + ejecución manual de arranque + `git grep desktop_ui` devuelve solo `platform/`.
+- **Verificar:** suite + ejecución manual de arranque + `git grep desktop_ui` devuelve solo `platforms/`.
 
 > **Rollback:** si un PR rompe la suite, revertir ese PR únicamente (los anteriores son ortogonales).
 
@@ -407,8 +455,8 @@ Todos **verdes desde el PR 1**, antes de cualquier refactor de esos módulos.
 
 | Módulo | Smoke mínimo (archivo propuesto) | Qué prueba (sin tocar hardware) |
 |--------|----------------------------------|--------------------------------|
-| `platform/windows/desktop_ui.py` (antes `core/desktop_ui.py`) | `tests/test_desktop_ui_smoke.py` | `norm()`/`similarity()` (funciones puras) con casos borde (tildes, espacios); `is_available()` → False cuando `pywinauto` ausente (monkeypatch de `sys.modules`); `list_windows()` devuelve `[]`/fallback sin lanzar; con `Desktop` trueado inyectado, `active_window_title()` devuelve el título fake. |
-| `platform/windows/office.py` (antes `core/office_control.py`) | `tests/test_office_smoke.py` | `available()` → False en no-Windows sin importar COM (assert `win32com` NO está en `sys.modules`); `create_document("word")` lanza `OfficeUnavailable` con mensaje legible; ninguno de los métodos importa `win32com.client` en la llamada. |
+| `platforms/windows/desktop_ui.py` (antes `core/desktop_ui.py`) | `tests/test_desktop_ui_smoke.py` | `norm()`/`similarity()` (funciones puras) con casos borde (tildes, espacios); `is_available()` → False cuando `pywinauto` ausente (monkeypatch de `sys.modules`); `list_windows()` devuelve `[]`/fallback sin lanzar; con `Desktop` trueado inyectado, `active_window_title()` devuelve el título fake. |
+| `platforms/windows/office.py` (antes `core/office_control.py`) | `tests/test_office_smoke.py` | `available()` → False en no-Windows sin importar COM (assert `win32com` NO está en `sys.modules`); `create_document("word")` lanza `OfficeUnavailable` con mensaje legible; ninguno de los métodos importa `win32com.client` en la llamada. |
 | `core/pc_control.py::PCController` | `tests/test_pc_control_smoke.py` | Instanciar con `PlatformController` fake + `pyautogui` monkeypatcheado; `looks_like_pc_command("abre chrome")` == True y `looks_like_pc_command("hola")` == False; ejecutar un paso **sin hardware** (p. ej. `type` con clipboard fake) devuelve `ActionResult(success=True)`; si `platform_controller.office_available()` es False, `office_open` degrada sin lanzar. |
 | `core/camera_observer.py::CameraObserver` | `tests/test_camera_observer_smoke.py` | Construir con `cv2.VideoCapture` falso (`read()` → `(True, zeros)`); 1 tick del lazo produce un `CameraObservation` neutro y no excepción; si `mediapipe` ausente (`sys.modules` monkeypatch), el lazo no se rompe (degradado). |
 | `core/system_audio.py` | `tests/test_system_audio_smoke.py` | Funciones puras sin hardware: `analyze_block()` sobre un array sintético devuelve dict de características con las claves esperadas; `classify(feats)` devuelve `(etiqueta, bool)` con ruido blanco → silencio/voz; `decide_reaction()` con `ReactorState` vacío no lanza y devuelve `None`/neutral. |

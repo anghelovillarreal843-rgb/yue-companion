@@ -203,20 +203,13 @@ def active_window_info() -> dict:
         titulo = str(getattr(activa, "title", "") or "").strip()
     except Exception:
         pass
-    try:
-        import sys
-        if sys.platform == "win32":
-            import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
-            pid = ctypes.c_ulong()
-            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            try:
-                import psutil
-                proceso = psutil.Process(pid.value).name().lower()
-            except Exception:
-                proceso = ""
-    except Exception:
-        pass
+    if not proceso:
+        try:
+            from platforms import get_platform_controller
+            _titulo_fg, _proceso_fg = get_platform_controller().foreground_app()
+            proceso = proceso or _proceso_fg
+        except Exception:
+            pass
     return {"title": titulo[:240], "process": proceso}
 
 
