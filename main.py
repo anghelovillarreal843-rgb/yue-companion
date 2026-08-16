@@ -372,12 +372,10 @@ class Controller(QObject):
             self._state_timer = QTimer(self)
             self._state_timer.setInterval(
                 max(100, int(getattr(config, "STATE_TICK_MS", 250))))
-            self._state_timer.timeout.connect(self.emotion_orchestrator.state_tick)
             self._state_timer.start()
 
         self._autonomy_timer = QTimer(self)
         self._autonomy_timer.setInterval(max(60, config.AUTONOMY_INTERVAL) * 1000)
-        self._autonomy_timer.timeout.connect(self.autonomy_director.autonomous_create)
 
         # NUEVO (check-in de ánimo): estado de una pregunta "del 1 al 5" a la
         # espera de respuesta, y un timer barato que evalúa si toca un check-in
@@ -426,6 +424,16 @@ class Controller(QObject):
         self.teacher_director = TeacherDirector(self.controller_ctx)
         self.autonomy_director = AutonomyDirector(self.controller_ctx)
         self.emotion_orchestrator = EmotionOrchestrator(self.controller_ctx)
+        # Canales de emoción (PR 5 paso 9): el orquestador publica avatar_emotion;
+        # el maestro reengancha el latido AHORA que el orquestador ya existe, y
+        # publica system_context (lo lee el VisionDirector: glance y checkin).
+        if getattr(self, "_state_timer", None) is not None:
+            self._state_timer.timeout.connect(self.emotion_orchestrator.state_tick)
+        if getattr(self, "_autonomy_timer", None) is not None:
+            self._autonomy_timer.timeout.connect(
+                self.autonomy_director.autonomous_create)
+        self.controller_ctx.system_context = (
+            lambda: self.emotion_orchestrator.refresh_bond())
         # Canales de composición (PR 5 paso 8): el AutonomyDirector se comunica
         # con estos dueños SOLO por el ctx, sin acoplamiento director->director.
         self.controller_ctx.pc_director = self.pc_director
@@ -586,8 +594,8 @@ class Controller(QObject):
         )
         self.controller_ctx.head_control = self.head_control
         if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
-            self.camera.set_landmark_consumer(self.head_control.process_landmarks)
-        self.camera.start()
+            self.controller_ctx.camera.set_landmark_consumer(self.head_control.process_landmarks)
+        self.controller_ctx.camera.start()
         QTimer.singleShot(1500, self._vision_preflight)
 
 
@@ -700,7 +708,7 @@ class Controller(QObject):
             wellbeing_nudge=wellbeing_nudge,
         )
         if bool(getattr(config, "CAMERA_CONTEXT_IN_CHAT", True)):
-            camera_context = self.camera.context_for_ai()
+            camera_context = self.controller_ctx.camera.context_for_ai()
             if camera_context:
                 prompt += (
                     "\n\nContexto visual local de cámara (sin identidad, sin fotos guardadas): "
@@ -712,7 +720,7 @@ class Controller(QObject):
             # una formulación libre ("¿alcanzas a verme?") el modelo diga que no.
             if vision_awareness is not None:
                 try:
-                    note = vision_awareness.camera_prompt_note(self.camera)
+                    note = vision_awareness.camera_prompt_note(self.controller_ctx.camera)
                     if note:
                         prompt += note
                 except Exception:
@@ -1112,7 +1120,7 @@ class Controller(QObject):
         if vision_awareness is not None:
             try:
                 if vision_awareness.asks_if_can_see(text):
-                    self._yue_say(vision_awareness.answer_can_see(self.camera))
+                    self._yue_say(vision_awareness.answer_can_see(self.controller_ctx.camera))
                     return
             except Exception as exc:
                 print("[vision] no pude resolver «¿puedes verme?»:", exc)
@@ -1557,7 +1565,7 @@ class Controller(QObject):
                 _resp = _vision_cmds.handle(getattr(self, "vision_mp", None), command, arg)
             except Exception:
                 _resp = None
-            self._yue_say(_resp if _resp else self.camera.describe())
+            self._yue_say(_resp if _resp else self.controller_ctx.camera.describe())
         elif command in {"/vision", "/visión"}:
             # Comandos del sistema de visión por cámara (MediaPipe Tasks).
             _resp = None
@@ -1645,7 +1653,7 @@ class Controller(QObject):
         self.pc.cancel()
         self.speaker.stop()
         self.listener.shutdown()
-        self.camera.stop()
+        self.controller_ctx.camera.stop()
         self.audio.stop()
         try:
             self.media_companion.stop()

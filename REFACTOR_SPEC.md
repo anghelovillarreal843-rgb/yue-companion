@@ -364,6 +364,15 @@ verde obligatorio antes de pasar al siguiente.
 | 10 | `DiálogoDirector` (conversación) | Probar: flujo completo de chat (texto, IA, error de IA → fallback). **Traspaso de dueño: `ctx.say` pasa a publicarlo este director (ver NOTA en §4.1).** |
 | 11 | Adelgazar `__init__`/`main()` a wiring puro. | Suite completa + arranque con y sin venv del sistema. |
 
+**Nota de verificación obligatoria (a partir del PR 5, paso 10 — aprendida en el micro-fix de
+arranque):** CADA reporte de paso debe incluir DOS verificaciones, no una:
+1. **Arranque real**: `Controller()` completo (test de humo `tests/test_humos.py` + `python3 main.py`
+   sin parches), porque regresiones de cableado (atributos movidos al ctx, orden de conexión de
+   señales, canales prometidos pero no publicados: `self.camera`, `state_tick`/`autonomy_timer`
+   conectados antes de crear al director, `ctx.system_context`) NO las detecta la suite de módulos.
+2. Smoke con fakes para lógica aislada, como hasta ahora.
+El smoke solo no vale como verificación de un paso.
+
 **Nota de consistencia:** los pasos 2-8 usan `ctx.workers.track(worker)` (del paso 1) para todo
 lanzamiento de workers; ningún director llama a `_track_worker` del `Controller` ni conoce al host.
 
