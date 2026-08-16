@@ -265,6 +265,19 @@ handlers de eventos Qt breves. `main()` queda solo como bootstrap.
 | 8 | **Autonomía** `_toggle_autonomy`, `_autonomous_create`, `_on_autonomy_done`, `_on_autonomy_failed`, `_run_internal_action`, `_set_head_control` | `engine/autonomy_director.py` · `AutonomyDirector` | Creación autónoma + acciones internas |
 | 9 | **Emoción/avatar/estado** `_set_avatar_emotion`, `_publish_companion_state`, `_state_tick`, `_sync_system_state`, `_refresh_bond`, `_update_mode_indicator`, `debug_state` | `engine/emotion_orchestrator.py` · `EmotionOrchestrator` | Estado del companion |
 
+**NOTA — comandos sin director propio (confirmada en el micro-fix de `/rutinas`, paso 10.1):**
+los comandos que no tienen un director dueño (`/actividad|/bitacora`, `/recuerda`, `/metas`,
+`/vinculo`, `/animo_historial`, `/reescanear_apps`, `/camara|/vision`) NO generan un director
+nuevo: se quedan como delegaciones directas a servicios de `ctx` DENTRO de `DialogueDirector`,
+bajo la regla «≤5 líneas = delegación» (la misma usada para quitar lógica de `Controller`).
+No tienen lógica de negocio propia que justifique extraerlos. Canales usados:
+`ctx.memory`, `ctx.memory_proactive`, `ctx.system_context` (`/vinculo`, `/meta`), los callbacks
+de servicio ya publicados por el maestro (`ctx.save_routine`, `ctx.list_routines`,
+`ctx.show_activity`, `ctx.glance`, `ctx.pc`, `ctx.pc_director`, `ctx.voice`, `ctx.autonomy`,
+`ctx.autonomy_director`, `ctx.vision_director`, `ctx.vision_mp`) y `vision.commands` (import
+local, mismo patrón que el maestro). `AppScanWorker` pasa a `engine/pc_worker.py` (es un worker
+de escritorio, no del maestro): los directores no importan `main`.
+
 **NOTA — canales `ctx.say` y `ctx.avatar_emotion` (relevante para fila 9 y fila 10 de §4.2;**
 **verificado en código tras el PR 5 paso 7):** `ctx.say` (main.py:411 → `self._yue_say`) y
 `ctx.avatar_emotion` (main.py:413 → `self._set_avatar_emotion`) son HOY callbacks publicados por

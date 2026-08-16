@@ -71,3 +71,17 @@ class PCRecoveryWorker(QThread):
                 self.done.emit(self.controller.repeat_last(progress=self.progress.emit))
         except Exception as exc:
             self.failed.emit(str(exc))
+class AppScanWorker(QThread):
+    done = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, controller):
+        super().__init__()
+        self.controller = controller
+
+    def run(self):
+        try:
+            self.done.emit(self.controller.rescan_apps())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+

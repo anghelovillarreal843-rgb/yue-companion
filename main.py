@@ -34,6 +34,7 @@ from engine.media_director import MediaCompanionDirector
 from engine.memory_proactive import MemoryProactive
 from engine.vision_director import VisionDirector, VisionHostAdapter
 from engine.autonomy_director import AutonomyDirector
+from engine.dialogue_director import DialogueDirector
 from engine.emotion_orchestrator import EmotionOrchestrator
 from engine.pc_director import PCDirector
 from engine.pc_worker import PCWorker, PCRecoveryWorker
@@ -112,20 +113,6 @@ class MediaCompanionBridge(QObject):
     status = pyqtSignal(str, bool)
 
 
-
-class AppScanWorker(QThread):
-    done = pyqtSignal(dict)
-    failed = pyqtSignal(str)
-
-    def __init__(self, controller):
-        super().__init__()
-        self.controller = controller
-
-    def run(self):
-        try:
-            self.done.emit(self.controller.rescan_apps())
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 
@@ -424,6 +411,7 @@ class Controller(QObject):
         self.pc_director = PCDirector(self.controller_ctx)
         self.teacher_director = TeacherDirector(self.controller_ctx)
         self.autonomy_director = AutonomyDirector(self.controller_ctx)
+        self.dialogue_director = DialogueDirector(self.controller_ctx)
         self.emotion_orchestrator = EmotionOrchestrator(self.controller_ctx)
         # Canales de emoción (PR 5 paso 9): el orquestador publica avatar_emotion;
         # el maestro reengancha el latido AHORA que el orquestador ya existe, y
@@ -438,10 +426,12 @@ class Controller(QObject):
         # Canales de composición (PR 5 paso 8): el AutonomyDirector se comunica
         # con estos dueños SOLO por el ctx, sin acoplamiento director->director.
         self.controller_ctx.pc_director = self.pc_director
+        self.controller_ctx.autonomy_director = self.autonomy_director
+        self.controller_ctx.vision_director = self.vision_director
         self.controller_ctx.save_routine = self._save_routine
         self.controller_ctx.show_activity = self._show_activity
         self.controller_ctx.describe_audio = self._describe_audio
-        self.controller_ctx.handle_command = self._handle_command
+        self.controller_ctx.handle_command = self.dialogue_director.handle_command
         self.controller_ctx.autonomy_timer = self._autonomy_timer
         # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
         self.controller_ctx.apply_mode_switch = self.teacher_director.apply_mode_switch
@@ -453,6 +443,7 @@ class Controller(QObject):
         self.pc.set_confirm_callback(self.pc_director.pc_confirm_by_voice)
         self.pc.set_action_log_callback(self.pc_director.on_pc_action_log)
         self.voice = VoiceDirector(self.controller_ctx)
+        self.controller_ctx.voice = self.voice
         self._checkin_timer = QTimer(self)
         self._checkin_timer.setInterval(
             max(30, int(getattr(config, "CHECKIN_CHECK_INTERVAL", 90))) * 1000
@@ -1096,7 +1087,7 @@ class Controller(QObject):
         self.chat.ensure_input_ready(focus=False)
 
         if text.startswith("/"):
-            self._handle_command(text)
+            self.controller_ctx.handle_command(text)
             return
 
         # NUEVO: enrutador de modos (punto ÚNICO de decisión). Detecta si el
@@ -1239,8 +1230,6 @@ class Controller(QObject):
     def _glance(self, pregunta: str = ""):
         self.vision_director.glance(pregunta=pregunta)
 
-    def _diagnose_vision(self):
-        self.vision_director.diagnose_vision()
     # ---------- preflight de visión (al arrancar) ----------
     def _vision_preflight(self):
         self.vision_director.vision_preflight()
@@ -1502,153 +1491,6 @@ class Controller(QObject):
             return sistema.resumen_visual()
         except Exception:
             return "No consigo leer el estado de la visión."
-
-    def _handle_command(self, text):
-        parts = text.split(" ", 1)
-        command = parts[0].lower()
-        arg = parts[1].strip() if len(parts) > 1 else ""
-
-        if command == "/help":
-            self._yue_say("Usa /pc seguido de una orden, /mira, /camara, /recuerda, /recuerdos, /meta, /metas, /vinculo, /autonomia, /animo, /animo_historial, /cabeza, /rutinas, /actividad, /reescanear_apps, /modo, /reporte, /diagvision o /diagvoz.")
-        elif command in {"/actividad", "/bitacora"}:
-            self._show_activity()
-        elif command in {"/reescanear_apps", "/reescanear-apps", "/apps"}:
-            self.chat.set_status("Reescaneando aplicaciones instaladas…")
-            worker = AppScanWorker(self.pc)
-            worker.done.connect(lambda result: (
-                self.chat.set_status(""),
-                self._yue_say(f"Catálogo actualizado: encontré {result.get('count', 0)} aplicaciones.")
-            ))
-            worker.failed.connect(lambda error: (
-                self.chat.set_status(""),
-                self._yue_say(f"No pude reescanear las aplicaciones: {error}")
-            ))
-            self.controller_ctx.workers.track(worker)
-        elif command in {"/rutinas", "/rutina"}:
-            arg_l = (arg or "").strip()
-            if not arg_l:
-                self._list_routines()
-            else:
-                # "/rutinas <nombre>" ejecuta esa rutina directamente.
-                self.pc_director.run_routine(arg_l)
-        elif command in {"/animo", "/ánimo"}:
-            self.memory_proactive.start_mood_checkin()
-        elif command in {"/animo_historial", "/ánimo_historial", "/animohistorial", "/animo-historial"}:
-            resumen = ""
-            try:
-                resumen = self.memory.get_mood_summary(7)
-            except Exception as exc:
-                print("[checkin] no pude leer el resumen de ánimo:", exc)
-            if resumen:
-                # get_mood_summary empieza en minúscula ("esta semana…"); la
-                # ponemos con mayúscula inicial para leerla sola.
-                self._yue_say(resumen[0].upper() + resumen[1:])
-            else:
-                self._yue_say(
-                    "Todavía no tengo suficientes señales de tu ánimo estos días. "
-                    "Cuéntame cómo estás, o usa /animo para dejarme una nota del 1 al 5."
-                )
-        elif command == "/pc" and arg:
-            self.pc_director.run_pc_order(arg)
-        elif command == "/mira":
-            self._glance()
-        elif command in {"/diagvision", "/diagnosticovision", "/diagvisión"}:
-            self._diagnose_vision()
-        elif command in {"/diagvoz", "/diagmicro", "/diagmic", "/diagoido", "/diagoído"}:
-            self.voice.diagnose_voice()
-        elif command in {"/camara", "/cámara"}:
-            # Aditivo: si el sistema de visión MediaPipe está enganchado, deja que
-            # maneje on/off; si no reconoce el argumento, cae al comportamiento
-            # clásico de siempre (self.camera.describe()).
-            _resp = None
-            try:
-                from vision import commands as _vision_cmds
-                _resp = _vision_cmds.handle(getattr(self, "vision_mp", None), command, arg)
-            except Exception:
-                _resp = None
-            self._yue_say(_resp if _resp else self.controller_ctx.camera.describe())
-        elif command in {"/vision", "/visión"}:
-            # Comandos del sistema de visión por cámara (MediaPipe Tasks).
-            _resp = None
-            try:
-                from vision import commands as _vision_cmds
-                _resp = _vision_cmds.handle(getattr(self, "vision_mp", None), command, arg)
-            except Exception as _exc:
-                _resp = f"No pude consultar la visión: {_exc}"
-            self._yue_say(_resp or "El sistema de visión no está disponible.")
-        elif command == "/recuerda" and arg:
-            self.memory.add_fact(arg)
-            self._yue_say("Lo guardé en mi memoria.")
-        elif command in {"/recuerdos", "/diagmemoria", "/diagrecuerdos"}:
-            self.memory_proactive.diagnose_memory(arg)
-        elif command == "/meta" and arg:
-            self.memory.add_goal(arg)
-            self.memory.add_bond_points(2)
-            self.emotion_orchestrator.refresh_bond()
-            self._yue_say("Meta registrada. Te ayudaré a mantenerla presente.")
-        elif command == "/metas":
-            goals = self.memory.list_goals()
-            self._yue_say(
-                "Tus metas: " + " · ".join(goal["text"] for goal in goals)
-                if goals else "No tienes metas activas."
-            )
-        elif command == "/vinculo":
-            points = self.memory.get_bond_points()
-            current, next_level, _ = bonding.progress(points)
-            if next_level:
-                self._yue_say(
-                    f"Nivel {current.index}/10. Faltan {next_level.threshold - points} puntos para avanzar."
-                )
-            else:
-                self._yue_say("El vínculo está en el nivel máximo.")
-        elif command == "/autonomia":
-            if arg.lower() in {"on", "activar", "activa"} and not self.autonomy.enabled:
-                self.autonomy_director.toggle_autonomy()
-            elif arg.lower() in {"off", "pausar", "desactivar"} and self.autonomy.enabled:
-                self.autonomy_director.toggle_autonomy()
-            else:
-                self._yue_say("La iniciativa automática está " + ("activa." if self.autonomy.enabled else "pausada."))
-        elif command in {"/cabeza", "/head"}:
-            arg_l = arg.lower().strip()
-            if arg_l in {"off", "no", "pausa", "pausar", "desactiva", "desactivar"}:
-                self.autonomy_director.set_head_control(False)
-            elif arg_l in {"on", "si", "sí", "activa", "activar", ""}:
-                # Sin argumento: alterna según el estado actual.
-                if not arg_l and getattr(self, "head_control", None) and self.head_control.is_active:
-                    self.autonomy_director.set_head_control(False)
-                else:
-                    self.autonomy_director.set_head_control(True)
-            else:
-                self.autonomy_director.set_head_control(True)
-        elif command == "/modo":
-            # NUEVO: consulta o cambia de modo por comando.
-            if not getattr(self.controller_ctx, "modes", None):
-                self._yue_say("El sistema de modos no está disponible.")
-            elif arg:
-                route = self.controller_ctx.modes.handle(arg)
-                if route.switched:
-                    self.controller_ctx.apply_mode_switch(route)
-                else:
-                    self._yue_say(f"No reconocí ese modo. Ahora estoy en modo {self.controller_ctx.modes.current_meta().get('label','')}.")
-            else:
-                meta = self.controller_ctx.modes.current_meta()
-                self._yue_say(f"Estoy en modo {meta.get('emoji','')} {meta.get('label','')}.")
-        elif command == "/reporte":
-            # NUEVO: exporta el progreso de la clase (md por defecto; csv/xlsx opcional).
-            if not getattr(self.controller_ctx, "teacher", None):
-                self._yue_say("El modo profesora no está disponible.")
-            else:
-                fmt = (arg or "md").lower().strip()
-                try:
-                    import os
-                    ruta = os.path.join(str(config.DATA_DIR), "teacher", f"reporte.{ 'xlsx' if fmt in ('xlsx','excel') else 'csv' if fmt=='csv' else 'md'}")
-                    salida = self.controller_ctx.teacher.export_report(ruta, fmt)
-                    self._yue_say(f"Guardé el reporte del progreso en: {salida}")
-                except Exception as exc:
-                    self._yue_say("No pude generar el reporte.")
-                    print("[profesora] error de reporte:", exc)
-        else:
-            self._yue_say("No conozco ese comando. Usa /help.")
 
     def shutdown(self):
         self.pc.cancel()
