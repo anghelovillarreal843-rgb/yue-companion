@@ -32,6 +32,7 @@ from engine.ai_worker import AiWorker
 from engine.media_director import MediaCompanionDirector
 from engine.memory_proactive import MemoryProactive
 from engine.vision_director import VisionDirector, VisionHostAdapter
+from engine.autonomy_director import AutonomyDirector
 from engine.pc_director import PCDirector
 from engine.pc_worker import PCWorker, PCRecoveryWorker
 from engine.voice_director import VoiceDirector
@@ -124,21 +125,6 @@ class AppScanWorker(QThread):
         except Exception as exc:
             self.failed.emit(str(exc))
 
-
-class AutonomyWorker(QThread):
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-
-    def __init__(self, engine, messages):
-        super().__init__()
-        self.engine = engine
-        self.messages = messages
-
-    def run(self):
-        try:
-            self.done.emit(self.engine.chat(self.messages, timeout=55))
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 class PCRecoveryWorker(QThread):
@@ -390,7 +376,7 @@ class Controller(QObject):
 
         self._autonomy_timer = QTimer(self)
         self._autonomy_timer.setInterval(max(60, config.AUTONOMY_INTERVAL) * 1000)
-        self._autonomy_timer.timeout.connect(self._autonomous_create)
+        self._autonomy_timer.timeout.connect(self.autonomy_director.autonomous_create)
 
         # NUEVO (check-in de ánimo): estado de una pregunta "del 1 al 5" a la
         # espera de respuesta, y un timer barato que evalúa si toca un check-in
@@ -438,6 +424,15 @@ class Controller(QObject):
         self.controller_ctx.memory_proactive = self.memory_proactive
         self.pc_director = PCDirector(self.controller_ctx)
         self.teacher_director = TeacherDirector(self.controller_ctx)
+        self.autonomy_director = AutonomyDirector(self.controller_ctx)
+        # Canales de composición (PR 5 paso 8): el AutonomyDirector se comunica
+        # con estos dueños SOLO por el ctx, sin acoplamiento director->director.
+        self.controller_ctx.pc_director = self.pc_director
+        self.controller_ctx.save_routine = self._save_routine
+        self.controller_ctx.show_activity = self._show_activity
+        self.controller_ctx.describe_audio = self._describe_audio
+        self.controller_ctx.handle_command = self._handle_command
+        self.controller_ctx.autonomy_timer = self._autonomy_timer
         # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
         self.controller_ctx.apply_mode_switch = self.teacher_director.apply_mode_switch
         self.controller_ctx.ai_failed = self._on_ai_failed
@@ -462,7 +457,7 @@ class Controller(QObject):
         self.pet.request_quit.connect(QApplication.instance().quit)
         self.pet.toggle_voice.connect(self.voice.toggle_voice)
         self.pet.toggle_mic.connect(self.voice.toggle_mic)
-        self.pet.toggle_autonomy.connect(self._toggle_autonomy)
+        self.pet.toggle_autonomy.connect(self.autonomy_director.toggle_autonomy)
         # Última observación estructurada de pantalla (ScreenObservation).
         self._last_screen_observation = None
         self.pet.look_screen.connect(self._glance)
@@ -588,6 +583,7 @@ class Controller(QObject):
             click_fn=self.pc.safe_click,
             is_blocked=lambda: self.controller_ctx.pc_busy,
         )
+        self.controller_ctx.head_control = self.head_control
         if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
             self.camera.set_landmark_consumer(self.head_control.process_landmarks)
         self.camera.start()
@@ -1315,7 +1311,7 @@ class Controller(QObject):
         # CUALQUIER modo: se comprueban antes de repartir la conversación.
         action, arg = commands.match(text)
         if action:
-            self._run_internal_action(action, arg)
+            self.autonomy_director.run_internal_action(action, arg)
             return
 
         # NUEVO (conciencia de cámara): preguntas directas "¿puedes verme?",
@@ -1679,157 +1675,6 @@ class Controller(QObject):
         else:
             self._yue_say("Todavía no hay mucho en la bitácora de esta semana.")
 
-    # ---------- iniciativa automática ----------
-    def _toggle_autonomy(self):
-        enabled = self.autonomy.toggle()
-        if enabled:
-            self._autonomy_timer.start()
-            self._yue_say("Iniciativa automática activada. Prepararé aportes útiles cuando estés inactivo.")
-        else:
-            self._autonomy_timer.stop()
-            self._yue_say("Iniciativa automática pausada.")
-
-    def _autonomous_create(self):
-        if self.controller_ctx.autonomy_busy or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy:
-            return
-        if not self.autonomy.can_create() or self.chat.is_user_composing():
-            return
-        # NUEVO: la iniciativa autónoma también respeta el estado de YUE. Si el
-        # cerebro central decidió que toca acompañar en silencio, no se generan
-        # aportes «útiles» por encima de eso.
-        if not self.memory_proactive.yue_may_take_initiative("medium"):
-            return
-        idle = time.time() - self._last_user_activity
-        if idle < config.AUTONOMY_IDLE_SECONDS:
-            return
-
-        self.controller_ctx.autonomy_busy = True
-        self._autonomy_started_at = self._last_user_activity
-        self.chat.set_status("Yue está preparando algo útil por iniciativa propia…")
-        messages = self.autonomy.build_prompt(
-            self.memory.recent_messages(10),
-            self.memory.get_facts(),
-            self.memory.list_goals(),
-        )
-        worker = AutonomyWorker(self.engine, messages)
-        worker.done.connect(self._on_autonomy_done)
-        worker.failed.connect(self._on_autonomy_failed)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_autonomy_done(self, text):
-        self.controller_ctx.autonomy_busy = False
-        self.chat.set_status("")
-        path = self.autonomy.save_creation(text)
-        still_idle = (
-            self._last_user_activity == self._autonomy_started_at
-            and time.time() - self._last_user_activity >= config.AUTONOMY_IDLE_SECONDS
-            and not self.chat.is_user_composing()
-        )
-        opened = False
-        if still_idle and config.AUTONOMY_PC_ENABLED and config.AUTONOMY_OPEN_CREATIONS:
-            try:
-                self.pc.open_path(path)
-                opened = True
-            except Exception as exc:
-                print("[autonomia] no pude abrir la creación:", exc)
-        if still_idle and config.AUTONOMY_NOTIFY:
-            suffix = " y la abrí" if opened else ""
-            self._yue_say(f"Preparé algo nuevo, lo guardé como {path.name}{suffix}.")
-        else:
-            print("[autonomia] creación guardada:", path)
-
-    def _on_autonomy_failed(self, error):
-        self.controller_ctx.autonomy_busy = False
-        self.chat.set_status("")
-        print("[autonomia] error:", error)
-
-    # ---------- acciones internas y comandos ----------
-    def _run_internal_action(self, action, arg):
-        if action == "stop_current":
-            self.pc.cancel()
-            self.speaker.stop()
-            self.controller_ctx.chat_request_id += 1
-            self.chat.set_status("")
-            self._yue_say("Me detuve. Te escucho.")
-        elif action == "pc_undo":
-            self.pc_director.undo_last_pc()
-        elif action == "pc_repeat":
-            self.pc_director.repeat_last_pc()
-        elif action == "routine_save":
-            self._save_routine(commands.routine_name(arg))
-        elif action == "routine_run":
-            self.pc_director.run_routine(commands.routine_name(arg))
-        elif action == "routine_list":
-            self._list_routines()
-        elif action == "activity_summary":
-            self._show_activity()
-        elif action == "voice_on":
-            if not self.speaker.enabled:
-                self.speaker.toggle()
-            self._yue_say("Bien, volveré a hablar en voz alta.")
-        elif action == "voice_off":
-            if self.speaker.enabled:
-                self.speaker.toggle()
-            self.chat.show_reply("Voz desactivada.")
-        elif action == "mic_off":
-            if self.listener._wanted_enabled:
-                self.listener.toggle()
-            self._yue_say("Dejé de escucharte por el micrófono.")
-        elif action == "mic_on":
-            if not self.listener._wanted_enabled:
-                self.listener.toggle()
-            self._yue_say("Micrófono activado. Puedes interrumpirme mientras hablo.")
-        elif action == "vision_look":
-            # Pasamos la frase EXACTA del usuario ("¿qué error aparece?",
-            # "explícame este gráfico") para que el analizador priorice eso y no
-            # dé una descripción genérica de toda la pantalla.
-            self._glance(pregunta=str(arg or ""))
-        elif action == "vision_off":
-            self._vision_on = False
-            self._yue_say("De acuerdo, dejo de mirar la pantalla.")
-        elif action == "audio_describe":
-            # YUE dice qué está sonando y, si hay contenido, da su impresión.
-            self._describe_audio()
-        elif action == "camera_status":
-            self._yue_say(self.camera.describe())
-        elif action == "show_goals":
-            self._handle_command("/metas")
-        elif action == "autonomy_toggle":
-            self._toggle_autonomy()
-        elif action == "head_control_on":
-            self._set_head_control(True)
-        elif action == "head_control_off":
-            self._set_head_control(False)
-        elif action == "help":
-            self._handle_command("/help")
-
-    def _set_head_control(self, on: bool):
-        """Activa/pausa el control del cursor con la cabeza (voz o comando).
-
-        Enciende la cadencia rápida de la cámara solo mientras está activo, y
-        habla desde el carácter de YUE. Respeta el interruptor maestro de config.
-        """
-        if not bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
-            self._yue_say("El control por cabeza está desactivado en la configuración.")
-            return
-        if not getattr(self, "head_control", None):
-            self._yue_say("El control por cabeza no está disponible ahora mismo.")
-            return
-        if on:
-            if not self.camera.active:
-                self._yue_say("Necesito la cámara encendida para moverte el cursor con la cabeza.")
-                return
-            self.head_control.enable()
-            self.camera.set_fast_mode(True)
-            self._yue_say(
-                "Bien… control por cabeza activado. Mira de frente un segundo mientras "
-                "te calibro. Para hacer clic, deja el cursor quietecito un momento."
-            )
-        else:
-            self.head_control.disable()
-            self.camera.set_fast_mode(False)
-            self._yue_say("Listo, solté el cursor. Control por cabeza desactivado.")
-
     def _on_vision_status(self, text, active):
         """Estado del sistema de visión por cámara (llega en el hilo de la UI).
 
@@ -2058,23 +1903,23 @@ class Controller(QObject):
                 self._yue_say("El vínculo está en el nivel máximo.")
         elif command == "/autonomia":
             if arg.lower() in {"on", "activar", "activa"} and not self.autonomy.enabled:
-                self._toggle_autonomy()
+                self.autonomy_director.toggle_autonomy()
             elif arg.lower() in {"off", "pausar", "desactivar"} and self.autonomy.enabled:
-                self._toggle_autonomy()
+                self.autonomy_director.toggle_autonomy()
             else:
                 self._yue_say("La iniciativa automática está " + ("activa." if self.autonomy.enabled else "pausada."))
         elif command in {"/cabeza", "/head"}:
             arg_l = arg.lower().strip()
             if arg_l in {"off", "no", "pausa", "pausar", "desactiva", "desactivar"}:
-                self._set_head_control(False)
+                self.autonomy_director.set_head_control(False)
             elif arg_l in {"on", "si", "sí", "activa", "activar", ""}:
                 # Sin argumento: alterna según el estado actual.
                 if not arg_l and getattr(self, "head_control", None) and self.head_control.is_active:
-                    self._set_head_control(False)
+                    self.autonomy_director.set_head_control(False)
                 else:
-                    self._set_head_control(True)
+                    self.autonomy_director.set_head_control(True)
             else:
-                self._set_head_control(True)
+                self.autonomy_director.set_head_control(True)
         elif command == "/modo":
             # NUEVO: consulta o cambia de modo por comando.
             if not getattr(self.controller_ctx, "modes", None):
