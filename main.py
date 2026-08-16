@@ -644,7 +644,7 @@ class Controller(QObject):
             self.emotion_orchestrator.publish_companion_state(resultado)
         else:
             state = emotion.infer_conversation_state(
-                user_context or self._last_user_text, text)
+                user_context or getattr(self, "_last_user_text", ""), text)
             self.emotion_orchestrator.set_avatar_emotion(state.name, state.intensity, state.duration_ms,
                                      priority=_PRIO_CONVERSACION, source="conversacion")
         # NUEVO: por defecto YUE solo habla. Muestra el texto únicamente si se
@@ -1530,7 +1530,7 @@ class Controller(QObject):
                 self._list_routines()
             else:
                 # "/rutinas <nombre>" ejecuta esa rutina directamente.
-                self._run_routine(arg_l)
+                self.pc_director.run_routine(arg_l)
         elif command in {"/animo", "/ánimo"}:
             self.memory_proactive.start_mood_checkin()
         elif command in {"/animo_historial", "/ánimo_historial", "/animohistorial", "/animo-historial"}:
