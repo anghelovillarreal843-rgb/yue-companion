@@ -137,6 +137,13 @@ def test_humano_routing_en_vivo_huérfanos_entregan_servicio(controller, monkeyp
     assert len(hechos) == antes + 1
     assert any("10_1" in f for f in hechos)
     assert emitidos, "el director debe confirmar el recuerdo"
+    # higiene: no dejar el hecho de prueba en la memoria real (contamina la
+    # DB de datos y los tests dependientes de estado, p.ej. test_episodic_memory)
+    import sqlite3
+    import config
+    with sqlite3.connect(str(config.DB_PATH)) as con:
+        con.execute("DELETE FROM facts WHERE text LIKE '%10_1%'")
+    emitidos.clear()
 
     # /metas -> listado real (vacío o con metas)
     emitidos.clear()

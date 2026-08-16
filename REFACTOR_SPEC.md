@@ -279,19 +279,46 @@ local, mismo patrón que el maestro). `AppScanWorker` pasa a `engine/pc_worker.p
 de escritorio, no del maestro): los directores no importan `main`.
 
 **NOTA — canales `ctx.say` y `ctx.avatar_emotion` (relevante para fila 9 y fila 10 de §4.2;**
-**verificado en código tras el PR 5 paso 7):** `ctx.say` (main.py:411 → `self._yue_say`) y
-`ctx.avatar_emotion` (main.py:413 → `self._set_avatar_emotion`) son HOY callbacks publicados por
-`Controller` en el `controller_ctx` y consumidos por `VisionDirector` (espejo empático y salidas
-de voz: vision_director.py:217, 452, 654). Cuando `EmotionOrchestrator` (fila 9) y
-`DiálogoDirector` (fila 10 de §4.2) se extraigan en sus pasos correspondientes, deben ser ELLOS
-quienes publiquen esos canales en el `controller_ctx` — `_set_avatar_emotion` es de la fila 9 y
-`_yue_say` es del núcleo conversacional de la fila 10 — con el mismo patrón de traspaso de dueño
-que se hizo con `ctx.camera` entre el paso 3 (quien la lee pasa a leerla del ctx) y el paso 7
-(`VisionDirector.setup_camera` es quien la publica). Es decir: la nota de que "X publica el
-canal" debe moverse de `main.py` a `engine/<director>.py` en el MISMO paso que extrae al
-director, y no quedarse en `main.py` como cable del maestro. Así no se repite la sorpresa de
-descubrir sobre el terreno que una dependencia del `VisionDirector` cuelga todavía de
-`Controller`.
+**verificado en código tras el PR 5 paso 7, actualizada con el RESULTADO del paso 9):** al
+escribir la NOTA, `ctx.say` (main.py:411 → `self._yue_say`) y `ctx.avatar_emotion` (main.py:413 →
+`self._set_avatar_emotion`) eran callbacks publicados por `Controller` en el `controller_ctx` y
+consumidos por `VisionDirector` (espejo empático y salidas de voz: vision_director.py:217, 452,
+654). El paso 9 (fila 9, `EmotionOrchestrator`) YA completó el traspaso de `ctx.avatar_emotion`:
+hoy lo publica `EmotionOrchestrator` (`engine/emotion_orchestrator.py:40` →
+`self.ctx.avatar_emotion = self.set_avatar_emotion`) y el maestro ya NO lo publica; los
+consumidores leen el MISMO canal, sin cambio de lectura (también lo consumen VoiceDirector,
+TeacherDirector y PCDirector). Queda pendiente el traspaso de `ctx.say`: cuando
+`DiálogoDirector` (fila 10 de §4.2) se extraiga en su paso, debe ser ÉL quien lo publique, con
+el mismo patrón de traspaso de dueño que se hizo con `ctx.camera` entre el paso 3 (quien la lee
+pasa a leerla del ctx) y el paso 7 (`VisionDirector.setup_camera` es quien la publica). Es
+decir: la nota de que "X publica el canal" debe moverse de `main.py` a `engine/<director>.py`
+en el MISMO paso que extrae al director, y no quedarse en `main.py` como cable del maestro.
+Así no se repite la sorpresa de descubrir sobre el terreno que una dependencia del
+`VisionDirector` cuelga todavía de `Controller`.
+
+**NOTA — arranque real de `Controller()` fuera de pytest (regla del proyecto desde el
+incidente de `system_context`/`self.camera`):** el arranque manual verificado (usado en cada
+reporte del PR 5) es el MISMO patrón que `tests/test_humos.py::controller`:
+
+```
+import main                                  # SIEMPRE ANTES que QApplication
+from core.camera_observer import CameraObserver
+CameraObserver.start = lambda self: None; CameraObserver.stop = lambda self: None
+main.VoiceListener.start = lambda self: None
+main.SystemAudioReactor.start = lambda self: None
+from PyQt5.QtWidgets import QApplication
+app = QApplication.instance() or QApplication([])
+ctrl = main.Controller()   # arranque real (wiring, directores, DB)
+ctrl.shutdown()
+```
+
+⚠ ORDEN DEL IMPORT: crear `QApplication` ANTES de `import main` produce un `SIGABRT`
+(`QMessageLogger::fatal` en el constructor de `QWidget`, verificado con gdb en cd90614 y
+posteriores — NO es SDL ni el hardware; es un detalle de inicialización sip/Qt del método
+manual). Con el orden de arriba el arranque manual funciona y sale limpio (rc=0, shutdown ok).
+No es una regresión de ningún paso: el arranque real de la app es `python3 main.py`, que crea
+su `QApplication` en su orden interno y NO pasa por este camino. Si se toca algo en el arranque
+del `Controller` (orden de creación de directores, timers, audio), reproducir este patrón.
 
 **NOTA — superficie duck-typed del `VisionHostAdapter` (PR 4, relevante para fila 5):**
 `VisionHostAdapter` (en `main.py`, PR 4) implementa formalmente `contracts.VisionHost`
