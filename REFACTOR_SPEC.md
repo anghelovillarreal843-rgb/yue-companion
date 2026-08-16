@@ -265,6 +265,21 @@ handlers de eventos Qt breves. `main()` queda solo como bootstrap.
 | 8 | **Autonomía** `_toggle_autonomy`, `_autonomous_create`, `_on_autonomy_done`, `_on_autonomy_failed`, `_run_internal_action`, `_set_head_control` | `engine/autonomy_director.py` · `AutonomyDirector` | Creación autónoma + acciones internas |
 | 9 | **Emoción/avatar/estado** `_set_avatar_emotion`, `_publish_companion_state`, `_state_tick`, `_sync_system_state`, `_refresh_bond`, `_update_mode_indicator`, `debug_state` | `engine/emotion_orchestrator.py` · `EmotionOrchestrator` | Estado del companion |
 
+**NOTA — canales `ctx.say` y `ctx.avatar_emotion` (relevante para fila 9 y fila 10 de §4.2;**
+**verificado en código tras el PR 5 paso 7):** `ctx.say` (main.py:411 → `self._yue_say`) y
+`ctx.avatar_emotion` (main.py:413 → `self._set_avatar_emotion`) son HOY callbacks publicados por
+`Controller` en el `controller_ctx` y consumidos por `VisionDirector` (espejo empático y salidas
+de voz: vision_director.py:217, 452, 654). Cuando `EmotionOrchestrator` (fila 9) y
+`DiálogoDirector` (fila 10 de §4.2) se extraigan en sus pasos correspondientes, deben ser ELLOS
+quienes publiquen esos canales en el `controller_ctx` — `_set_avatar_emotion` es de la fila 9 y
+`_yue_say` es del núcleo conversacional de la fila 10 — con el mismo patrón de traspaso de dueño
+que se hizo con `ctx.camera` entre el paso 3 (quien la lee pasa a leerla del ctx) y el paso 7
+(`VisionDirector.setup_camera` es quien la publica). Es decir: la nota de que "X publica el
+canal" debe moverse de `main.py` a `engine/<director>.py` en el MISMO paso que extrae al
+director, y no quedarse en `main.py` como cable del maestro. Así no se repite la sorpresa de
+descubrir sobre el terreno que una dependencia del `VisionDirector` cuelga todavía de
+`Controller`.
+
 **NOTA — superficie duck-typed del `VisionHostAdapter` (PR 4, relevante para fila 5):**
 `VisionHostAdapter` (en `main.py`, PR 4) implementa formalmente `contracts.VisionHost`
 (`request_emotion`, `emotion_would_win`, `media_playing`, `is_speaking`) y REENVÍA por
@@ -345,8 +360,8 @@ verde obligatorio antes de pasar al siguiente.
 | 6 | `TeacherDirector` (modos/PDF/autoadvance) | Probar: arrastrar PDF, página siguiente, modo profesor, autoadvance. |
 | 7 | `VisionDirector` (glance/cámara/emoción) | Probar con cámara apagada (degradado) y con cámara encendida: `_glance`, estado, emoción facial. |
 | 8 | `AutonomyDirector` (autonomía) | Probar: toggle autonomía, creación autónoma con confirmación. |
-| 9 | `EmotionOrchestrator` (avatar/estado) | Probar: estados del companion, `debug_state`, mover/animar avatar. |
-| 10 | `DiálogoDirector` (conversación) | Probar: flujo completo de chat (texto, IA, error de IA → fallback). |
+| 9 | `EmotionOrchestrator` (avatar/estado) | Probar: estados del companion, `debug_state`, mover/animar avatar. **Traspaso de dueño: `ctx.avatar_emotion` pasa a publicarlo este director (ver NOTA en §4.1).** |
+| 10 | `DiálogoDirector` (conversación) | Probar: flujo completo de chat (texto, IA, error de IA → fallback). **Traspaso de dueño: `ctx.say` pasa a publicarlo este director (ver NOTA en §4.1).** |
 | 11 | Adelgazar `__init__`/`main()` a wiring puro. | Suite completa + arranque con y sin venv del sistema. |
 
 **Nota de consistencia:** los pasos 2-8 usan `ctx.workers.track(worker)` (del paso 1) para todo

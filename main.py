@@ -33,6 +33,7 @@ from engine.media_director import MediaCompanionDirector
 from engine.memory_proactive import MemoryProactive
 from engine.vision_director import VisionDirector, VisionHostAdapter
 from engine.autonomy_director import AutonomyDirector
+from engine.emotion_orchestrator import EmotionOrchestrator
 from engine.pc_director import PCDirector
 from engine.pc_worker import PCWorker, PCRecoveryWorker
 from engine.voice_director import VoiceDirector
@@ -371,7 +372,7 @@ class Controller(QObject):
             self._state_timer = QTimer(self)
             self._state_timer.setInterval(
                 max(100, int(getattr(config, "STATE_TICK_MS", 250))))
-            self._state_timer.timeout.connect(self._state_tick)
+            self._state_timer.timeout.connect(self.emotion_orchestrator.state_tick)
             self._state_timer.start()
 
         self._autonomy_timer = QTimer(self)
@@ -396,7 +397,6 @@ class Controller(QObject):
         self.controller_ctx.state_manager = self.state_manager
         self.controller_ctx.say = self._yue_say
         self.controller_ctx.user_message = self.on_user_message
-        self.controller_ctx.avatar_emotion = self._set_avatar_emotion
         # PR 5.4: PCDirector (~16 métodos del paquete PC) vive en engine/.
         self.controller_ctx.pc = self.pc
         self.controller_ctx.engine = self.engine
@@ -425,6 +425,7 @@ class Controller(QObject):
         self.pc_director = PCDirector(self.controller_ctx)
         self.teacher_director = TeacherDirector(self.controller_ctx)
         self.autonomy_director = AutonomyDirector(self.controller_ctx)
+        self.emotion_orchestrator = EmotionOrchestrator(self.controller_ctx)
         # Canales de composición (PR 5 paso 8): el AutonomyDirector se comunica
         # con estos dueños SOLO por el ctx, sin acoplamiento director->director.
         self.controller_ctx.pc_director = self.pc_director
@@ -505,7 +506,7 @@ class Controller(QObject):
         self.pet.show()
         self.chat.show()
         self.chat.reposition(self.pet)
-        self._refresh_bond()
+        self.emotion_orchestrator.refresh_bond()
         self._greet()
         if self.autonomy.enabled:
             self._autonomy_timer.start()
@@ -590,209 +591,6 @@ class Controller(QObject):
         QTimer.singleShot(1500, self._vision_preflight)
 
 
-    # ==================================================================
-    # CEREBRO CENTRAL: latido, estado del sistema y propuestas
-    # ==================================================================
-    def _state_tick(self):
-        """Latido del gestor de estado (cada 250 ms, en el hilo de la interfaz).
-
-        Hace dos cosas:
-
-        1. `state_manager.tick()` caduca las propuestas vencidas y RECALCULA el
-           ganador. Antes este método existía pero no lo llamaba nadie, así que
-           el modo profesora podía seguir gobernando la cara de YUE mucho
-           después de haber terminado la explicación.
-        2. Refresca el SYSTEM STATE con los interruptores de verdad. Los campos
-           `mic`, `camera`, `voice`, etc. estaban definidos pero casi nadie los
-           escribía: eran decorativos y mentían. Ahora se leen del sitio real.
-
-        Todo va dentro de try: un fallo aquí no puede tumbar la aplicación, y
-        se ejecuta muy a menudo.
-        """
-        gestor = getattr(self, "state_manager", None)
-        if gestor is None:
-            return
-        try:
-            gestor.tick()
-        except Exception as exc:
-            print("[estado] fallo en el latido:", exc)
-        try:
-            self._sync_system_state()
-        except Exception as exc:
-            print("[estado] no pude sincronizar el estado del sistema:", exc)
-
-    def _sync_system_state(self):
-        """Vuelca el estado REAL de la aplicación en el SYSTEM STATE.
-
-        Se lee todo con `getattr` y valores por defecto: si algún subsistema no
-        está disponible (o aún no se creó), el campo se queda como estaba en vez
-        de reventar.
-        """
-        gestor = getattr(self, "state_manager", None)
-        if gestor is None:
-            return
-
-        # --- micrófono ---
-        escuchando = bool(getattr(getattr(self, "listener", None), "enabled", False))
-        mic = "listening" if escuchando else "off"
-
-        # --- cámara: cuenta cualquiera de los tres sistemas de visión ---
-        camara = False
-        for atributo in ("camera", "vision_mp", "vision_v3"):
-            objeto = getattr(self, atributo, None)
-            if objeto is not None and bool(getattr(objeto, "active", False)):
-                camara = True
-                break
-
-        # --- voz: `is_speaking` es una PROPIEDAD, no un método (ya nos mordió) ---
-        hablando = bool(getattr(getattr(self, "speaker", None), "is_speaking", False))
-
-        # --- multimedia y modo profesora ---
-        sonando = bool(getattr(getattr(self, "audio", None), "media_playing", False))
-        profesora = bool(getattr(getattr(self.controller_ctx, "teacher", None), "is_active", False))
-
-        pc_ocupado = bool(getattr(self, "_pc_busy", False))
-        vision_ocupada = bool(getattr(self, "_vision_busy", False))
-        autonomia = bool(getattr(self, "_autonomy_busy", False))
-
-        # --- actividad: lo que YUE está haciendo AHORA, de más a menos urgente ---
-        if pc_ocupado:
-            actividad, modo = "controlling", "control"
-        elif profesora:
-            actividad, modo = "teaching", "teacher"
-        elif vision_ocupada:
-            actividad, modo = "watching", "companion"
-        elif autonomia:
-            actividad, modo = "conversing", "autonomy"
-        elif hablando:
-            actividad, modo = "conversing", "companion"
-        else:
-            actividad, modo = "idle", "companion"
-
-        gestor.update_system(
-            mic=mic,
-            camera="active" if camara else "off",
-            voice="speaking" if hablando else "silent",
-            mode=modo,
-            media_playing=sonando,
-            pc_busy=pc_ocupado,
-            vision_busy=vision_ocupada,
-            autonomy_busy=autonomia,
-            teacher_active=profesora,
-            activity=actividad,
-        )
-
-    def _publish_companion_state(self, resultado):
-        """Vuelca un `CompanionResult` en el cerebro central.
-
-        Aquí se hace efectiva la separación que da nombre a todo esto:
-
-            result.affect + result.context + result.intent  →  USER STATE
-            result.expression + result.decision             →  YUE PROPOSAL
-
-        Se reutilizan las piezas que ya existían tal cual. `CompanionExpression
-        Policy` ya decidía bien la cara de YUE (responde al usuario en vez de
-        imitarlo); lo único que se añade es el resto del comportamiento
-        (qué hace, cómo suena, cuánta iniciativa se permite) para que el estado
-        final sea coherente y no una cara suelta.
-        """
-        gestor = getattr(self, "state_manager", None)
-        if gestor is None or resultado is None:
-            return
-        try:
-            from core.state import (
-                observation_from_companion, proposal_from_companion,
-                user_state_from_companion,
-            )
-        except Exception:
-            return
-
-        # 1) El texto entra como OBSERVACIÓN, con su peso (1.00) y su marca de
-        #    explícito. Es lo que impide que una cara neutra en cámara tumbe un
-        #    "estoy muy triste" escrito con todas las letras.
-        try:
-            observacion = observation_from_companion(resultado)
-            if observacion is not None:
-                gestor.observe(observacion)
-        except Exception as exc:
-            print("[estado] no pude registrar la observación de texto:", exc)
-
-        # 2) Lo que ningún sensor sabe (necesidad, tendencia, riesgo) lo aporta
-        #    el cerebro afectivo. NO se recalcula: se copia de AffectiveContext.
-        try:
-            base = gestor.user_state()
-            usuario = user_state_from_companion(resultado, base=base)
-            gestor.update_user(
-                need=usuario.need, secondary_need=usuario.secondary_need,
-                trend=usuario.trend, sustained=usuario.sustained,
-                duration_s=usuario.duration_s, stability=usuario.stability,
-                distress=usuario.distress, trigger=usuario.trigger,
-                safety_level=usuario.safety_level,
-            )
-        except Exception as exc:
-            print("[estado] no pude actualizar el estado del usuario:", exc)
-
-        # 3) La reacción de YUE va como PROPUESTA. Puede perder (si la profesora
-        #    o una emergencia mandan) y no pasa nada: seguirá viva y tomará el
-        #    mando en cuanto la otra caduque.
-        try:
-            propuesta = proposal_from_companion(resultado)
-            if propuesta is not None:
-                gestor.propose(propuesta)
-        except Exception as exc:
-            print("[estado] no pude enviar la propuesta de comportamiento:", exc)
-
-    def _set_avatar_emotion(self, name, intensity=0.6, duration_ms=4500,
-                            *, priority=None, source="sistema"):
-        """Propone una cara para YUE. Ya NO la aplica: eso es del renderer.
-
-        Antes había llamadas sueltas a `pet.set_emotion(...)` desde la
-        conversación, la música, la cámara y el control del PC, y ganaba siempre
-        la última en llegar. Por eso una canción alegre podía poner al avatar
-        eufórico justo mientras el usuario contaba algo doloroso.
-
-        Ahora esto es solo una PROPUESTA. `YueStateManager` arbitra por
-        PRIORIDAD y `AvatarRenderer` pinta al ganador (y es el único sitio del
-        proyecto que llama a `pet.set_emotion`):
-
-            EMERGENCY (seguridad) > USER (apoyo) > TEACHER (profesora) >
-            CONVERSATION > EMOTION > MEDIA (música) > AMBIENT > IDLE
-
-        Devuelve si esta propuesta gobierna AHORA. Devolver False no significa
-        que se haya perdido: sigue viva y ganará cuando caduque la de arriba.
-
-        Si el gestor no estuviera disponible (arranque degradado), se cae al
-        modo directo de siempre para no dejar el avatar congelado.
-        """
-        try:
-            from core.state import Priority
-            prioridad = Priority.EMOTION if priority is None else priority
-        except Exception:
-            prioridad = 60
-
-        gestor = getattr(self, "state_manager", None)
-        if gestor is not None:
-            try:
-                # El renderer, suscrito al gestor, pintará al ganador. Aquí NO
-                # se toca el avatar: esa es justamente la regla que se quería
-                # imponer, y el único punto que la cumple es core/state/renderer.
-                return bool(gestor.request_emotion(
-                    name, intensity, duration_ms,
-                    priority=int(prioridad), source=source))
-            except Exception as exc:
-                print("[estado] fallo al proponer la emoción:", exc)
-
-        # EXCEPCIÓN CONSERVADA A PROPÓSITO: sin gestor de estado no hay
-        # renderer, y sin renderer nadie pintaría nunca al avatar. Antes que
-        # dejar a YUE con la cara congelada, se aplica directo. Solo ocurre si
-        # `core.state` no llegó a importarse en el arranque.
-        try:
-            self.pet.set_emotion(name, intensity, duration_ms)
-        except Exception as exc:
-            print("[avatar] no pude aplicar la emoción:", exc)
-            return False
-        return True
-
     # ---------- interfaz ----------
     def toggle_chat(self):
         if self.chat.isVisible():
@@ -834,11 +632,11 @@ class Controller(QObject):
         if resultado is not None:
             # Se REPROPONE para refrescar el TTL: la cara debe durar toda la
             # respuesta. La decisión en sí ya la tomó `_publish_companion_state`.
-            self._publish_companion_state(resultado)
+            self.emotion_orchestrator.publish_companion_state(resultado)
         else:
             state = emotion.infer_conversation_state(
                 user_context or self._last_user_text, text)
-            self._set_avatar_emotion(state.name, state.intensity, state.duration_ms,
+            self.emotion_orchestrator.set_avatar_emotion(state.name, state.intensity, state.duration_ms,
                                      priority=_PRIO_CONVERSACION, source="conversacion")
         # NUEVO: por defecto YUE solo habla. Muestra el texto únicamente si se
         # pidió (CHAT_MOSTRAR_RESPUESTAS) o si la voz está apagada (para no callar).
@@ -859,15 +657,8 @@ class Controller(QObject):
             pass
         self.speaker.say(clean)
 
-    # ---------- vínculo y prompt ----------
-    def _refresh_bond(self):
-        points = self.memory.get_bond_points()
-        current, _, _ = bonding.progress(points)
-        self.chat.set_bond(current)
-        return current
-
     def _greet(self):
-        current = self._refresh_bond()
+        current = self.emotion_orchestrator.refresh_bond()
         message = (
             "Ah… ya llegaste. No es que te estuviera esperando. ¿Qué necesitas?"
             if current.index <= 1 else
@@ -1249,7 +1040,7 @@ class Controller(QObject):
             # a USER STATE; cómo reacciona YUE va como PROPUESTA al arbitraje.
             # La cara de YUE es una RESPUESTA a lo que le pasa al usuario, no
             # una imitación: un usuario furioso no pone a YUE furiosa.
-            self._publish_companion_state(resultado)
+            self.emotion_orchestrator.publish_companion_state(resultado)
             if bool(getattr(config, "AFFECT_DEBUG", False)):
                 print("[affect]", resultado.summary)
                 try:
@@ -1283,7 +1074,7 @@ class Controller(QObject):
         else:
             # --- Camino CLÁSICO (retrocompatibilidad total) ------------------
             reaction = emotion.infer_reaction_to_user(text)
-            self._set_avatar_emotion(reaction.name, reaction.intensity,
+            self.emotion_orchestrator.set_avatar_emotion(reaction.name, reaction.intensity,
                                      reaction.duration_ms,
                                      priority=_PRIO_APOYO, source="apoyo_usuario")
             try:
@@ -1500,7 +1291,7 @@ class Controller(QObject):
                 f"errores de transcripción): «{lyrics}»."
             )
 
-        current = self._refresh_bond()
+        current = self.emotion_orchestrator.refresh_bond()
         system = self._system_prompt(current)
         user = (
             "El usuario te pregunta qué te pareció lo que suena (o acaba de sonar) en "
@@ -1534,7 +1325,7 @@ class Controller(QObject):
         if not isinstance(reaction, Reaction):
             return
         # La expresión va en directo, aunque no diga nada.
-        self._set_avatar_emotion(reaction.emotion, reaction.intensity, reaction.duration_ms,
+        self.emotion_orchestrator.set_avatar_emotion(reaction.emotion, reaction.intensity, reaction.duration_ms,
                                  priority=_PRIO_MEDIA, source="multimedia")
         if not reaction.comment:
             return
@@ -1596,7 +1387,7 @@ class Controller(QObject):
         if not isinstance(reaction, CompanionReaction):
             return
         # El estado emocional continuo anima el avatar aunque YUE decida callar.
-        self._set_avatar_emotion(reaction.emotion, reaction.intensity, reaction.duration_ms,
+        self.emotion_orchestrator.set_avatar_emotion(reaction.emotion, reaction.intensity, reaction.duration_ms,
                                  priority=_PRIO_MEDIA, source="multimedia")
         if reaction.gesture:
             self.pet.play_gesture(reaction.gesture, min(1.0, reaction.intensity))
@@ -1693,106 +1484,6 @@ class Controller(QObject):
         except Exception:
             pass
 
-    # ==================================================================
-    # DEPURACIÓN: inspeccionar por qué YUE hizo lo que hizo
-    # ==================================================================
-    def debug_state(self, imprimir=True):
-        """Foto completa del cerebro central: los tres estados y el arbitraje.
-
-        Muestra USER STATE, YUE STATE, SYSTEM STATE, la propuesta ganadora, las
-        propuestas activas con su TTL restante y las observaciones vivas de cada
-        sensor con su confianza ponderada.
-
-        Es la herramienta para cuando YUE ponga una cara rara y no se sepa por
-        qué: aquí se ve quién la pidió, con qué prioridad y cuánto le queda.
-
-            >>> app.debug_state()
-        """
-        gestor = getattr(self, "state_manager", None)
-        if gestor is None:
-            if imprimir:
-                print("[estado] el gestor central no está disponible.")
-            return {}
-        try:
-            foto = gestor.debug_snapshot()
-        except Exception as exc:
-            print("[estado] no pude tomar la foto:", exc)
-            return {}
-        if not imprimir:
-            return foto
-
-        u, y, s = foto["user"], foto["yue"], foto["system"]
-        print("\n" + "=" * 62)
-        print("  ESTADO DE YUE  ·  " + foto["summary"])
-        print("=" * 62)
-        print(f"  USUARIO   {u['emotion']}"
-              f"{'/' + u['secondary_emotion'] if u['secondary_emotion'] else ''}"
-              f"  conf={u['confidence']}  fuente={u['dominant_source']}"
-              f"  explícito={u['explicit']}")
-        print(f"            necesidad={u['need']}  tendencia={u['trend']}"
-              f"  sostenido={u['sustained']}  riesgo={u['safety_level']}")
-        print(f"            confianza por fuente → texto={u['text_confidence']}"
-              f"  voz={u['voice_confidence']}  cámara={u['camera_confidence']}")
-        print(f"  YUE       {y['emotion']} ({y['intensity']})"
-              f"  comportamiento={y['behavior']}  voz={y['voice_style']}")
-        print(f"            iniciativa={y['initiative']}  avatar={y['avatar_state']}"
-              f"  ganador={y['source']} (p{y['priority']})  ttl={y['ttl_remaining']}")
-        if y.get("reason"):
-            print(f"            motivo: {y['reason']}")
-        print(f"  SISTEMA   micro={s['mic']}  cámara={s['camera']}  voz={s['voice']}"
-              f"  modo={s['mode']}  actividad={s['activity']}")
-        print(f"            multimedia={s['media_playing']}  pc={s['pc_busy']}"
-              f"  visión={s['vision_busy']}  autonomía={s['autonomy_busy']}")
-
-        print("  ── PROPUESTAS ACTIVAS " + "─" * 39)
-        if not foto["proposals"]:
-            print("     (ninguna: YUE en reposo)")
-        for p in foto["proposals"]:
-            marca = "►" if p["source"] == foto["winner"] else " "
-            print(f"   {marca} p{p['priority']:<4} {p['source']:<14}"
-                  f" {p['emotion']:<10} {p['behavior']:<14}"
-                  f" ttl={p['ttl_remaining']}")
-
-        print("  ── OBSERVACIONES VIVAS " + "─" * 38)
-        if not foto["observations"]:
-            print("     (ninguna)")
-        for o in foto["observations"]:
-            print(f"     {o['source']:<8} {o['emotion']:<12}"
-                  f" bruta={o['confidence']:<6} ponderada={o['effective']:<6}"
-                  f" explícito={o['explicit']}  hace {o['age_s']}s")
-        try:
-            from core import voice_affect
-            if not voice_affect.AVAILABLE:
-                print("  nota: " + voice_affect.describe())
-        except Exception:
-            pass
-        print("=" * 62 + "\n")
-        return foto
-
-    # ==================================================================
-    # ADITIVO: estado vivo de percepción visual (punto 10)
-    # ==================================================================
-    def vision_state(self):
-        """El `vision_state` que puede consultar CUALQUIER parte de YUE.
-
-        Devuelve SIEMPRE un diccionario con la forma completa (personas,
-        emociones, objetos, gestos, texto, postura, mirada, escena, cámara y
-        marca de actualización), incluso con la visión apagada. Así quien lo
-        use no necesita comprobar None ni claves ausentes:
-
-            estado = self.vision_state()
-            if estado["personas"]["hay_persona"] and estado["mirada"]["mira_a_yue"]:
-                ...
-        """
-        sistema = getattr(self, "vision_mp", None)
-        if sistema is not None:
-            try:
-                return sistema.vision_state()
-            except Exception as exc:
-                print("[vision] no pude leer el estado visual:", exc)
-        from vision.live_state import _estado_vacio
-        return _estado_vacio()
-
     def vision_resumen(self):
         """Una línea en español con lo que YUE ve ahora mismo."""
         sistema = getattr(self, "vision_mp", None)
@@ -1884,7 +1575,7 @@ class Controller(QObject):
         elif command == "/meta" and arg:
             self.memory.add_goal(arg)
             self.memory.add_bond_points(2)
-            self._refresh_bond()
+            self.emotion_orchestrator.refresh_bond()
             self._yue_say("Meta registrada. Te ayudaré a mantenerla presente.")
         elif command == "/metas":
             goals = self.memory.list_goals()

@@ -203,7 +203,7 @@ def test_6_vision_no_toca_el_avatar_directamente():
     """
     import re
     raiz = Path(__file__).resolve().parents[1]
-    permitidos = {"core/state/renderer.py", "main.py",
+    permitidos = {"core/state/renderer.py", "main.py", "engine/emotion_orchestrator.py",
                   "vision/integration.py", "core/vision/integration.py"}
 
     patron = re.compile(r"^\s*[\w.]*pet\.set_emotion\(", re.MULTILINE)
@@ -484,19 +484,19 @@ def test_sin_gestor_la_iniciativa_no_bloquea_nada():
 
 def test_sync_system_state_refleja_la_realidad():
     """Los campos del SYSTEM STATE dejan de ser decorativos."""
-    import main
     import types
+    from engine.emotion_orchestrator import EmotionOrchestrator
     gestor = _sm()
-    app = types.SimpleNamespace(
+    ctx = types.SimpleNamespace(
         state_manager=gestor,
         listener=types.SimpleNamespace(enabled=True),
         camera=types.SimpleNamespace(active=True),
         speaker=types.SimpleNamespace(is_speaking=False),
         audio=types.SimpleNamespace(media_playing=True),
-        controller_ctx=types.SimpleNamespace(
-            teacher=types.SimpleNamespace(is_active=True)),
-        _pc_busy=False, _vision_busy=False, _autonomy_busy=False)
-    main.Controller._sync_system_state(app)
+        teacher=types.SimpleNamespace(is_active=True),
+        pc_busy=False, vision_busy=False, autonomy_busy=False)
+    app = types.SimpleNamespace(ctx=ctx, controller_ctx=ctx)
+    EmotionOrchestrator.sync_system_state(app)
 
     sistema = gestor.system_state()
     assert sistema.mic == "listening"
@@ -508,17 +508,17 @@ def test_sync_system_state_refleja_la_realidad():
 
 
 def test_sync_system_state_prioriza_el_control_de_pc():
-    import main
     import types
+    from engine.emotion_orchestrator import EmotionOrchestrator
     gestor = _sm()
-    app = types.SimpleNamespace(
+    ctx = types.SimpleNamespace(
         state_manager=gestor,
         listener=types.SimpleNamespace(enabled=False),
         speaker=types.SimpleNamespace(is_speaking=True),
-        controller_ctx=types.SimpleNamespace(
-            teacher=types.SimpleNamespace(is_active=True)),
-        _pc_busy=True, _vision_busy=False, _autonomy_busy=False)
-    main.Controller._sync_system_state(app)
+        teacher=types.SimpleNamespace(is_active=True),
+        pc_busy=True, vision_busy=False, autonomy_busy=False)
+    app = types.SimpleNamespace(ctx=ctx, controller_ctx=ctx)
+    EmotionOrchestrator.sync_system_state(app)
     # Controlar el PC es lo más urgente: manda sobre la clase.
     assert gestor.system_state().activity == "controlling"
     assert gestor.system_state().voice == "speaking"
