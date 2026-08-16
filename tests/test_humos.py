@@ -18,9 +18,16 @@ from PyQt5.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="module")
-def controller():
+def controller(tmp_path_factory):
+    import config
     import main as m
     from core.camera_observer import CameraObserver
+
+    # Persistencia aislada: el Controller lee `config.DB_PATH` en runtime
+    # (main.py, dentro de __init__), así que apuntarlo a un tmp ANTES de
+    # crearlo garantiza que ni el arranque ni los comandos toquen data/yue.db.
+    db_original = config.DB_PATH
+    config.DB_PATH = str(tmp_path_factory.mktemp("yue_humos") / "yue.db")
 
     # Solo el disparo físico del hardware: cero dispositivo, cero tarjeta.
     CameraObserver.start = lambda self: None
@@ -36,6 +43,7 @@ def controller():
     finally:
         if ctrl is not None:
             ctrl.shutdown()
+        config.DB_PATH = db_original
         app.processEvents()
 
 
@@ -137,13 +145,6 @@ def test_humano_routing_en_vivo_huérfanos_entregan_servicio(controller, monkeyp
     assert len(hechos) == antes + 1
     assert any("10_1" in f for f in hechos)
     assert emitidos, "el director debe confirmar el recuerdo"
-    # higiene: no dejar el hecho de prueba en la memoria real (contamina la
-    # DB de datos y los tests dependientes de estado, p.ej. test_episodic_memory)
-    import sqlite3
-    import config
-    with sqlite3.connect(str(config.DB_PATH)) as con:
-        con.execute("DELETE FROM facts WHERE text LIKE '%10_1%'")
-    emitidos.clear()
 
     # /metas -> listado real (vacío o con metas)
     emitidos.clear()
