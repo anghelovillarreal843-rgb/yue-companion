@@ -40,6 +40,9 @@ class ControllerContext:
         self.episodic = None    # PR 5.3 (MemoryProactive)
         self.story_memory = None  # PR 5.3 (MemoryProactive)
         self.memory_ext = None  # PR 5.3 (MemoryProactive)
+        self.audio = None            # PR 5.7 (VisionDirector)
+        self.vision_mp = None        # PR 5.7 (VisionDirector: sistema de visión MP)
+        self.memory_proactive = None # PR 5.7 (VisionDirector: iniciativa del cerebro)
         # -- callbacks del host (cables; dueños futuros: DiálogoDirector/Orchestrator)
         self.say = None
         self.user_message = None
@@ -65,6 +68,7 @@ class ControllerContext:
         self._vision_busy = False          # PR 5.3: flags del cerebro central
         self._chat_request_id = 0          # PR 5.6: contador de peticiones en curso
         self._teacher_autoadvance_pending = False   # PR 5.6: auto-avance del PDF
+        self._vision_on = True         # PR 5.7: visión en pausa (VisionDirector)
 
     @property
     def input_source(self) -> str:
@@ -153,6 +157,14 @@ class ControllerContext:
     @teacher_autoadvance_pending.setter
     def teacher_autoadvance_pending(self, valor: bool) -> None:
         self._teacher_autoadvance_pending = valor
+
+    @property
+    def vision_on(self) -> bool:
+        return self._vision_on
+
+    @vision_on.setter
+    def vision_on(self, valor: bool) -> None:
+        self._vision_on = bool(valor)
 
     @property
     def avatar_conversation_priority(self) -> int:

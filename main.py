@@ -25,14 +25,13 @@ from PyQt5.QtWidgets import QApplication
 import config
 from core.ai_engine import AIEngine
 from core.memory import Memory
-from core import bonding, personality, safety, screen_capture as vision, emotion, commands, activity
+from core import bonding, personality, safety, emotion, commands, activity
 from core import memory_consolidation
-from core.camera_observer import CameraObserver, CameraObservation
-from contracts.vision_host import VisionHost
 from engine.controller_ctx import ControllerContext
 from engine.ai_worker import AiWorker
 from engine.media_director import MediaCompanionDirector
 from engine.memory_proactive import MemoryProactive
+from engine.vision_director import VisionDirector, VisionHostAdapter
 from engine.pc_director import PCDirector
 from engine.pc_worker import PCWorker, PCRecoveryWorker
 from engine.voice_director import VoiceDirector
@@ -62,67 +61,6 @@ except Exception:  # pragma: no cover - degradación elegante
 #: las necesita para saber si dos fuentes apuntan en la misma dirección
 #: ("tristeza" y "cansancio" sí; "tristeza" y "alegría" no). Son valores
 #: gruesos a propósito: la cara da una pista, no una medida.
-_CAMARA_VA = {
-    "happy": (0.7, 0.6), "sad": (-0.7, 0.25), "angry": (-0.6, 0.85),
-    "fear": (-0.6, 0.8), "surprise": (0.15, 0.8), "disgust": (-0.5, 0.5),
-    "tired": (-0.35, 0.15), "neutral": (0.0, 0.3),
-}
-
-
-class VisionHostAdapter(VisionHost):
-    """Adapta la app (Controller) al contrato VisionHost para vision/integration.
-
-    PR 4: implementa formalmente los 4 miembros del contrato delegando en el
-    gestor de estado y reenvía por __getattr__ el RESTO de la superficie
-    duck-typed que vision/integration.py sigue usando (can_speak/can_animate y
-    callbacks): chat, teacher, pet, _yue_say, _on_vision_status,
-    observe_emotion, flags _*_busy, _yue_may_take_initiative.
-
-    NOTA (REFACTOR_SPEC §4.1 fila 5): cuando VisionDirector se extraiga en
-    PR 5, esas dependencias deben llegarle vía controller_ctx (patrón
-    WorkerRegistry), NO heredando este __getattr__ hacia el Controller.
-    """
-
-    def __init__(self, controller):
-        self._controller = controller
-
-    def request_emotion(self, name: str, intensity: float, duration_ms: int,
-                        priority: int, source: str) -> None:
-        gestor = getattr(self._controller, "state_manager", None)
-        if gestor is not None:
-            gestor.request_emotion(str(name), float(intensity), int(duration_ms),
-                                   priority=int(priority), source=str(source or "vision"))
-
-    def emotion_would_win(self, priority: int) -> bool:
-        gestor = getattr(self._controller, "state_manager", None)
-        if gestor is None:
-            return False  # prudente: sin gestor la visión no propone
-        try:
-            return bool(gestor.would_win(int(priority), "vision"))
-        except Exception:
-            return False
-
-    @property
-    def media_playing(self) -> bool:
-        audio = getattr(self._controller, "audio", None)
-        try:
-            return bool(getattr(audio, "media_playing", False))
-        except Exception:
-            return False
-
-    @property
-    def is_speaking(self) -> bool:
-        speaker = getattr(self._controller, "speaker", None)
-        try:
-            return bool(getattr(speaker, "is_speaking", False))
-        except Exception:
-            return False
-
-    def __getattr__(self, nombre):
-        # Puente formal: el resto del duck-typing de vision/integration.py se
-        # resuelve contra el Controller real (getattr(..., None) lo absorbe).
-        return getattr(self._controller, nombre)
-
 
 def _valencia_activacion_camara(clave):
     """(valencia, activación) para una etiqueta facial. Neutro si no se conoce."""
@@ -170,205 +108,6 @@ class MediaCompanionBridge(QObject):
     avatar = pyqtSignal(object)
     status = pyqtSignal(str, bool)
 
-
-class VisionWorker(QThread):
-    """MIRA la pantalla con el flujo completo: captura -> clasificación ->
-    OCR y/o VisionRouter -> respuesta.
-
-    ADITIVO: antes llamaba directo a `engine.look()` con un único proveedor y,
-    si ese fallaba, YUE decía "no pude ver". Ahora la observación estructurada
-    trae texto OCR aunque toda la visión multimodal se caiga, así que YUE puede
-    seguir contando qué hay en pantalla.
-
-    Emite `observed(object)` con la ScreenObservation para quien la quiera.
-    """
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-    observed = pyqtSignal(object)
-
-    def __init__(self, engine, system, instruction, question="", force_fresh=True,
-                 monitor=None):
-        super().__init__()
-        self.engine = engine
-        self.system = system
-        self.instruction = instruction
-        self.question = question or instruction
-        self.force_fresh = bool(force_fresh)
-        self.monitor = monitor
-
-    def run(self):
-        try:
-            obs = self.engine.look_screen(
-                question=self.question, force_fresh=self.force_fresh,
-                monitor=self.monitor,
-            )
-            try:
-                self.observed.emit(obs)
-            except Exception:
-                pass
-            if not obs:
-                # Ni descripción visual ni texto: informamos del motivo real.
-                motivo = " | ".join(str(e)[:160] for e in (obs.errors or []))
-                self.failed.emit(motivo or "no obtuve nada de la pantalla")
-                return
-            respuesta = self.engine.answer_from_observation(
-                obs, self.system, question=self.question)
-            if not (respuesta or "").strip():
-                # El router de texto tampoco respondió: al menos devolvemos lo
-                # que se observó, en crudo, antes que un "no puedo ver".
-                respuesta = (obs.visual_description
-                             or ("Esto es lo que alcanzo a leer en tu pantalla:\n\n"
-                                 + obs.ocr_text[:900]))
-            self.done.emit(respuesta)
-        except Exception as exc:
-            self.failed.emit(str(exc))
-
-
-class VisionLegacyWorker(QThread):
-    """Camino antiguo (una sola llamada a `engine.look()` con la captura).
-
-    Se conserva para el diagnóstico y para cualquier flujo que ya dependiera de
-    él; el flujo normal usa VisionWorker.
-    """
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-
-    def __init__(self, engine, system, instruction):
-        super().__init__()
-        self.engine = engine
-        self.system = system
-        self.instruction = instruction
-
-    def run(self):
-        try:
-            self.done.emit(self.engine.look(self.system, vision.capture_b64(), self.instruction))
-        except Exception as exc:
-            self.failed.emit(str(exc))
-
-
-class VisionDiagWorker(QThread):
-    """Autodiagnóstico de visión: prueba CAPTURA y MODELO por separado."""
-    done = pyqtSignal(object)
-
-    def __init__(self, engine):
-        super().__init__()
-        self.engine = engine
-
-    def run(self):
-        report = []
-        # 0) FILA de proveedores visuales (sin exponer ninguna clave).
-        try:
-            fila = self.engine.vision_router_report()
-            if fila:
-                disponibles = [p for p in fila if p.get("disponible")]
-                detalle = " · ".join(
-                    f"{p['nombre']}/{p['modelo'][:34]}"
-                    f"{'' if p.get('disponible') else ' (' + (p.get('ultimo_error') or 'sin clave')[:28] + ')'}"
-                    for p in fila[:5]
-                )
-                report.append((
-                    f"Fila visual ({len(disponibles)}/{len(fila)} disponibles)",
-                    bool(disponibles), detalle,
-                ))
-            else:
-                report.append(("Fila visual", False,
-                               "vacía (VISION_PROVIDER=none o sin claves multimodales)"))
-        except Exception as exc:
-            report.append(("Fila visual", False, str(exc)[:200]))
-        # 0b) Endpoint único de compatibilidad.
-        try:
-            info = self.engine.vision_diag_info()
-            report.append((
-                "Endpoint de compatibilidad",
-                bool(info.get("ok")),
-                f"host={info.get('host','?')} · modelo={info.get('modelo','?')} · clave={info.get('clave','?')}",
-            ))
-        except Exception as exc:
-            report.append(("Endpoint de compatibilidad", False, str(exc)[:200]))
-        # 0c) Motor OCR (es el respaldo final: importa saber si existe).
-        try:
-            from core import screen_ocr
-            hay_ocr = screen_ocr.available()
-            report.append(("Motor OCR (respaldo)", bool(hay_ocr),
-                           f"motor={screen_ocr.engine_name()}"))
-        except Exception as exc:
-            report.append(("Motor OCR (respaldo)", False, str(exc)[:200]))
-        # 1) Captura de pantalla (con monitores y antigüedad del frame).
-        info_cap = vision.capture_info()
-        if info_cap["ok"]:
-            report.append((
-                "Captura de pantalla", True,
-                f"{info_cap['width']}x{info_cap['height']}px · monitor "
-                f"{info_cap.get('monitor', 1)}/{info_cap.get('monitors', 1)} · "
-                f"{info_cap['bytes']} bytes · frame_age {info_cap.get('frame_age', 0)}s · "
-                f"método {info_cap.get('method', '?')}",
-            ))
-        else:
-            report.append(("Captura de pantalla", False, info_cap["note"]))
-            self.done.emit(report)
-            return
-        # 2) Mirada REAL de principio a fin (clasificación + visión + OCR).
-        try:
-            obs = self.engine.look_screen(
-                question="¿Qué se ve en la pantalla? Una sola frase.",
-                force_fresh=True,
-            )
-            report.append((
-                "Clasificación de contenido", True,
-                f"tipo={obs.detected_content_type} · confianza={obs.confidence:.2f} · "
-                f"estrategia={obs.strategy}",
-            ))
-            report.append((
-                "Visión multimodal", obs.has_vision(),
-                (f"{obs.provider_used}/{obs.model_used}: {obs.visual_description[:150]}"
-                 if obs.has_vision()
-                 else " | ".join(str(e)[:120] for e in obs.errors) or "sin respuesta"),
-            ))
-            report.append((
-                "OCR de pantalla", obs.has_text(),
-                f"{obs.ocr_chars} caracteres leídos" if obs.has_text() else "sin texto legible",
-            ))
-        except Exception as exc:
-            report.append(("Mirada completa", False, str(exc)[:300]))
-        self.done.emit(report)
-
-
-class OcrVisionWorker(QThread):
-    """Visión por OCR: lee el texto de la pantalla y responde con el modelo de
-    chat (no necesita clave de visión multimodal). Corre fuera del hilo de UI."""
-    done = pyqtSignal(str)
-    failed = pyqtSignal(str)
-
-    def __init__(self, engine, system, instruction):
-        super().__init__()
-        self.engine = engine
-        self.system = system
-        self.instruction = instruction
-
-    def run(self):
-        try:
-            self.done.emit(self.engine.look_ocr(self.system, self.instruction))
-        except Exception as exc:
-            self.failed.emit(str(exc))
-
-
-class VisionPreflightWorker(QThread):
-    """Valida al arrancar la clave/proveedor de visión SIN gastar tokens.
-
-    Corre en segundo plano para no bloquear la interfaz; emite el dict que
-    devuelve engine.preflight_vision().
-    """
-    done = pyqtSignal(object)
-
-    def __init__(self, engine):
-        super().__init__()
-        self.engine = engine
-
-    def run(self):
-        try:
-            self.done.emit(self.engine.preflight_vision())
-        except Exception as exc:
-            self.done.emit({"ok": False, "reason": "error", "detail": str(exc)[:200]})
 
 
 class AppScanWorker(QThread):
@@ -565,21 +304,11 @@ class Controller(QObject):
         self.listener = VoiceListener()
         self.pc = PCController()
         self.autonomy = Autonomy()
+        self.controller_ctx = ControllerContext()  # PR 5.1: workers viven en ctx
         self._camera_bridge = CameraBridge()
-        self.camera = CameraObserver(
-            observation_callback=self._camera_bridge.observation.emit,
-            status_callback=self._camera_bridge.status.emit,
-        )
-        # NUEVO (accesibilidad): control del cursor con la cabeza. Reutiliza los
-        # landmarks de la MISMA cámara y clica por el camino seguro de pc_control
-        # (solo clic izquierdo; nunca puede disparar acciones bloqueadas). Se
-        # aparta si hay una orden de PC en curso, para no pelear por el ratón.
-        self.head_control = HeadCursorController(
-            click_fn=self.pc.safe_click,
-            is_blocked=lambda: self.controller_ctx.pc_busy,
-        )
-        if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
-            self.camera.set_landmark_consumer(self.head_control.process_landmarks)
+        # El CameraObserver y el head_control los crea/engancha setup_camera
+        # (PR 5.7): el observador vive en el VisionDirector y publica su
+        # registro en ctx.camera.
         self._audio_bridge = AudioBridge()
         self.audio = SystemAudioReactor(
             reaction_callback=self._audio_bridge.reaction.emit,
@@ -617,7 +346,8 @@ class Controller(QObject):
         except Exception as exc:
             print("[estado] no pude enganchar el renderer del avatar:", exc)
 
-        self.controller_ctx = ControllerContext()  # PR 5.1: workers viven en ctx
+        self.vision_director = VisionDirector(self.controller_ctx)
+        self.setup_camera()
         self._floaters = []
         # El módulo de lecciones necesita el LLM para reflexionar sobre los fallos.
         try:
@@ -693,8 +423,8 @@ class Controller(QObject):
         self.controller_ctx.list_routines = self._list_routines
         # PR 5.3: MemoryProactive (13 métodos de memoria/ánimo) vive en engine/.
         self.controller_ctx.system_prompt = self._system_prompt
-        self.controller_ctx.camera = self.camera
         self.controller_ctx.autonomy = self.autonomy
+        self.controller_ctx.audio = self.audio
         self.controller_ctx.episodic = getattr(self, "episodic", None)
         self.controller_ctx.story_memory = getattr(self, "story_memory", None)
         self.controller_ctx.memory_ext = getattr(self, "memory_ext", None)
@@ -705,6 +435,7 @@ class Controller(QObject):
         self.controller_ctx.autonomy_busy = False
         self.controller_ctx.vision_busy = False
         self.memory_proactive = MemoryProactive(self.controller_ctx)
+        self.controller_ctx.memory_proactive = self.memory_proactive
         self.pc_director = PCDirector(self.controller_ctx)
         self.teacher_director = TeacherDirector(self.controller_ctx)
         # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
@@ -756,8 +487,8 @@ class Controller(QObject):
         # pueda comentar la canción/el vídeo con su contenido real.
         self.media_director = MediaCompanionDirector()
         self.listener.media_heard.connect(self.media_director.remember_heard)
-        self._camera_bridge.status.connect(self._on_camera_status)
-        self._camera_bridge.observation.connect(self._on_camera_observation)
+        self._camera_bridge.status.connect(self.vision_director.on_camera_status)
+        self._camera_bridge.observation.connect(self.vision_director.on_camera_observation)
         self._audio_bridge.reaction.connect(self._on_audio_reaction)
         self._audio_bridge.status.connect(self._on_audio_status)
         self._media_companion_bridge.reaction.connect(self._on_media_companion_reaction)
@@ -786,13 +517,11 @@ class Controller(QObject):
         if bool(getattr(config, "CHECKIN_ENABLED", True)):
             self._checkin_timer.start()
         self.listener.start()
-        self.camera.start()
         self.media_companion.start()
         self.audio.start()
         # ADITIVO: validación de la clave de visión al arrancar. Corre en segundo
         # plano (no bloquea) y, si el proveedor rechaza la clave (401/403), avisa
         # claramente en el chat en vez de fallar en silencio más tarde.
-        QTimer.singleShot(1500, self._vision_preflight)
         # NUEVO (memoria a largo plazo): al arrancar, en un hilo de fondo y a baja
         # frecuencia, consolidamos el historial viejo en un resumen persistente.
         # Best-effort: si no toca o no hay clave de IA, no hace nada. Nunca bloquea
@@ -820,7 +549,9 @@ class Controller(QObject):
         # clásico o una CAMERA_INDEX distinta para no pelear por la misma webcam.
         try:
             from vision import integration as vision_mp
-            self.vision_mp = vision_mp.attach(VisionHostAdapter(self))
+            self.vision_mp = vision_mp.attach(VisionHostAdapter(self.vision_director))
+            self.controller_ctx.vision_mp = self.vision_mp
+            self.vision_director.check_legacy_migration()
         except Exception as exc:
             print("[vision-mp] no se pudo enganchar el sistema de visión:", exc)
             self.vision_mp = None
@@ -841,28 +572,27 @@ class Controller(QObject):
         # .risk_signal/.set_fast_mode) pero por dentro habla con el motor de
         # percepción nuevo. Así se prueba la migración SIN borrar el código viejo.
         # Por defecto está en false: nada cambia.
-        try:
-            if (self.vision_mp is not None
-                    and bool(getattr(config, "VISION_REPLACE_LEGACY", False))):
-                from vision.legacy_adapter import LegacyCameraObserverAdapter
-                self.camera.stop()          # libera la webcam del observador clásico
-                self.camera = LegacyCameraObserverAdapter(
-                    getattr(self.vision_mp, "perception", None),
-                    status_callback=self._camera_bridge.status.emit,
-                    context_max_age=float(getattr(config, "CAMERA_CONTEXT_MAX_AGE", 8.0)),
-                )
-                # El control por cabeza se reengancha al adaptador: el motor
-                # nuevo entrega los landmarks crudos igual que el clásico, así
-                # que el cursor sigue funcionando con UNA sola webcam.
-                if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
-                    self.camera.set_landmark_consumer(self.head_control.process_landmarks)
-                self.camera.start()
-                # PR 5.3: el registro de cámara MUTABLE cambió de objeto; el ctx
-                # (lo leen MemoryProactive/seguridad) debe ver siempre el actual.
-                self.controller_ctx.camera = self.camera
-                print("[vision-mp] migración activa: CameraObserver -> adaptador de percepción.")
-        except Exception as exc:
-            print("[vision-mp] no pude activar el adaptador de migración:", exc)
+    def setup_camera(self):
+        """PR 5.7: reenganchado y arranque del sistema de cámara. El VisionDirector
+        hace el reenganche fino (ctx, bridges, migración si VISION_REPLACE_LEGACY)
+        y el maestro arranca la cámara física y agenda el preflight de visión."""
+        self.vision_director.setup_camera(
+            observation_callback=self._camera_bridge.observation.emit,
+            status_callback=self._camera_bridge.status.emit,
+        )
+        # NUEVO (accesibilidad): control del cursor con la cabeza. Reutiliza los
+        # landmarks de la MISMA cámara y clica por el camino seguro de pc_control
+        # (solo clic izquierdo; nunca puede disparar acciones bloqueadas). Se
+        # aparta si hay una orden de PC en curso, para no pelear por el ratón.
+        self.head_control = HeadCursorController(
+            click_fn=self.pc.safe_click,
+            is_blocked=lambda: self.controller_ctx.pc_busy,
+        )
+        if bool(getattr(config, "HEAD_CONTROL_ENABLED", True)):
+            self.camera.set_landmark_consumer(self.head_control.process_landmarks)
+        self.camera.start()
+        QTimer.singleShot(1500, self._vision_preflight)
+
 
     # ==================================================================
     # CEREBRO CENTRAL: latido, estado del sistema y propuestas
@@ -1709,492 +1439,15 @@ class Controller(QObject):
         print("[IA] error:", error)
 
     # ---------- visión de pantalla ----------
+    # ---------- visión de pantalla (delegada al VisionDirector) ----------
     def _glance(self, pregunta: str = ""):
-        """Observación explícita; la visión automática permanece silenciosa.
-
-        `pregunta` es la frase original del usuario ("¿qué error aparece?",
-        "explícame este gráfico"…). Se pasa entera al analizador para que el
-        modelo priorice lo que de verdad se preguntó.
-        """
-        # Es una petición explícita del usuario: si la visión estaba en pausa, la
-        # reactivamos para poder mirar ahora mismo.
-        if not self._vision_on:
-            self._vision_on = True
-        if self.controller_ctx.vision_busy or self.controller_ctx.pc_busy or self.chat.is_user_composing():
-            return
-        current = self._refresh_bond()
-        instruction = (
-            "Mira la pantalla actual y responde en español con una observación útil y breve. "
-            "Ignora las ventanas del propio avatar de Yue. No enumeres todo lo visible; "
-            "menciona solo lo relevante para la petición explícita del usuario."
-        )
-        self.controller_ctx.vision_busy = True
-        self.chat.set_status("Yue está mirando tu pantalla…")
-        # ADITIVO: si se pidió visión-solo-OCR de forma EXPLÍCITA, seguimos con el
-        # camino OCR de siempre. En cualquier otro caso usamos el flujo completo
-        # (captura -> clasificación -> VisionRouter -> fallback OCR), que YA
-        # incluye el OCR: si toda la visión multimodal se cae, YUE igual cuenta
-        # qué texto hay en pantalla en vez de decir "no puedo ver".
-        if bool(getattr(config, "VISION_OCR_ONLY", False)):
-            instruccion_ocr = (
-                "Vas a mirar la pantalla del usuario a través del texto que hay en "
-                "ella (leído por OCR). Responde en español, breve y útil, a su "
-                "petición. Ignora menús o barras del sistema si no vienen a cuento. "
-                "Si el texto no basta para responder, dilo con naturalidad."
-            )
-            worker = OcrVisionWorker(self.engine, self._system_prompt(current), instruccion_ocr)
-        else:
-            worker = VisionWorker(
-                self.engine, self._system_prompt(current), instruction,
-                question=(pregunta or instruction),
-                # Una petición explícita SIEMPRE captura de nuevo: nunca se
-                # responde con una observación vieja cuando el usuario dice
-                # "mira mi pantalla" o "qué ves ahora".
-                force_fresh=True,
-            )
-            worker.observed.connect(self._on_screen_observed)
-        worker.done.connect(self._on_vision_done)
-        worker.failed.connect(self._on_vision_failed)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_screen_observed(self, obs):
-        """Guarda la última observación estructurada de pantalla.
-
-        La capa conversacional puede consultarla (por ejemplo /diagvision, o para
-        dar contexto al chat) sin volver a capturar.
-        """
-        self._last_screen_observation = obs
-        try:
-            print("[VISION] " + obs.resumen_log())
-        except Exception:
-            pass
-
-    def _on_vision_done(self, text):
-        self.controller_ctx.vision_busy = False
-        self.chat.set_status("")
-        if text:
-            self._yue_say(text)
-        else:
-            self._yue_say("Miré la pantalla pero no obtuve una descripción. ¿Lo intento de nuevo?")
-
-    def _on_vision_failed(self, error):
-        self.controller_ctx.vision_busy = False
-        self.chat.set_status("")
-        # Antes esto solo se imprimía y parecía que "la visión no funciona".
-        print("[vision] error:", error)
-        msg = str(error or "")
-        low = msg.lower()
-        if any(k in low for k in ("ocr", "tesseract")):
-            hablado = ("No encontré texto legible en la pantalla. Si querías que "
-                       "leyera algo con texto, ábrelo en primer plano; y si no tengo "
-                       "OCR instalado, hará falta Tesseract.")
-        elif any(k in low for k in ("api", "key", "clave", "auth", "401", "403")):
-            hablado = "No pude usar mi visión: revisa la clave del modelo de visión en la configuración."
-        elif any(k in low for k in ("mss", "imagegrab", "pillow", "capturar", "captur", "screenshot", "display", "grab", "no module")):
-            hablado = "No pude capturar la pantalla; puede faltar una librería o un permiso de captura."
-        elif any(k in low for k in ("negra", "black")):
-            hablado = ("La captura salió completamente negra. Suele pasar con vídeo "
-                       "protegido o con la aceleración por hardware; prueba a "
-                       "desactivarla en esa aplicación.")
-        elif any(k in low for k in ("antigua", "frame_age")):
-            hablado = "La captura llegó demasiado tarde; déjame intentarlo otra vez."
-        elif any(k in low for k in ("todos los modelos visuales", "cuota", "quota", "rate limit", "429")):
-            hablado = ("Mis modelos visuales están sin cupo ahora mismo y tampoco "
-                       "encontré texto legible en la pantalla.")
-        elif any(k in low for k in ("model", "modelo", "decommission", "not found", "404", "400", "unsupported", "image")):
-            hablado = "El modelo de visión rechazó la imagen. Puede que el modelo ya no exista o no acepte imágenes."
-        else:
-            hablado = "Ahora mismo no pude ver la pantalla."
-        self._yue_say(hablado)
-        # Mostramos SIEMPRE el detalle técnico en el chat (aunque YUE esté en modo
-        # solo-voz), para poder diagnosticarlo. Es un mensaje de sistema.
-        try:
-            self.chat.show_reply("⚠️ Detalle de visión: " + msg[:400])
-        except Exception:
-            pass
+        self.vision_director.glance(pregunta=pregunta)
 
     def _diagnose_vision(self):
-        """Prueba captura y modelo por separado y muestra el resultado en el chat."""
-        try:
-            self.chat.show_reply("🔎 Diagnóstico de visión en curso… (captura y modelo)")
-        except Exception:
-            pass
-        self.chat.set_status("Diagnosticando la visión…")
-        worker = VisionDiagWorker(self.engine)
-        worker.done.connect(self._on_vision_diag)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_vision_diag(self, report):
-        self.chat.set_status("")
-        lineas = ["🔎 Diagnóstico de visión:"]
-        todo_ok = True
-        for nombre, ok, detalle in report:
-            lineas.append(f"{'✅' if ok else '❌'} {nombre}: {detalle}")
-            todo_ok = todo_ok and ok
-        try:
-            self.chat.show_reply("\n".join(lineas))
-        except Exception:
-            pass
-        if todo_ok:
-            self._yue_say("Mi visión funciona bien. Ya puedo mirar tu pantalla.")
-        else:
-            self._yue_say("Encontré el problema de mi visión; te dejé el detalle en el chat.")
-
+        self.vision_director.diagnose_vision()
     # ---------- preflight de visión (al arrancar) ----------
     def _vision_preflight(self):
-        """Al arrancar, valida en segundo plano la clave de visión y avisa claro
-        si el proveedor la rechaza. No bloquea la interfaz ni gasta tokens."""
-        # Si la visión es solo-OCR, no usamos modelo multimodal: la clave da igual.
-        if getattr(config, "VISION_OCR_ONLY", False):
-            return
-        if not getattr(config, "VISION_PREFLIGHT", True):
-            return
-        if not getattr(config, "VISION_ENABLED", True):
-            return
-        worker = VisionPreflightWorker(self.engine)
-        worker.done.connect(self._on_vision_preflight)
-        self.controller_ctx.workers.track(worker)
-
-    def _on_vision_preflight(self, res):
-        res = res or {}
-        host = res.get("host", "?")
-        model = res.get("model", "?")
-        detail = res.get("detail", "")
-        if res.get("ok"):
-            print(f"[vision] preflight OK · host={host} · modelo={model}")
-            return
-        reason = res.get("reason", "")
-        if reason == "disabled":
-            return  # el usuario apagó la visión a propósito (VISION_PROVIDER=none)
-        print(f"[vision] preflight FALLÓ · motivo={reason} · host={host} · {detail}")
-        if reason == "invalid_key":
-            aviso = (
-                f"⚠️ Mi visión está apagada: el proveedor «{host}» rechazó la clave "
-                "(401/403 – clave inválida o sin acceso al modelo). Pon una clave "
-                "VÁLIDA en VISION_API_KEY dentro del .env y reiníciame. "
-                f"Detalle del proveedor: {detail}"
-            )
-        elif reason in ("no_key", "no_base"):
-            aviso = (
-                "⚠️ Mi visión no tiene credenciales. En el .env define VISION_PROVIDER "
-                "(together/openai/groq), VISION_API_KEY y VISION_BASE_URL de tu "
-                "proveedor de visión, y reiníciame."
-            )
-        elif reason == "unreachable":
-            aviso = (
-                f"⚠️ No pude contactar al proveedor de visión «{host}» (red o host "
-                f"caído). Revisa tu conexión. Detalle: {detail}"
-            )
-        else:
-            aviso = f"⚠️ Mi visión no está lista ({reason or 'desconocido'}). Detalle: {detail}"
-        try:
-            self.chat.show_reply(aviso)
-        except Exception:
-            pass
-
-    # ---------- cámara local ----------
-    def _on_camera_status(self, message, active):
-        self.pet.set_camera_active(bool(active))
-        print(f"[camara] estado: {message}")
-
-    def _on_camera_observation(self, observation):
-        # El dato se conserva dentro de CameraObserver. No se narra en el chat.
-        if not isinstance(observation, CameraObservation):
-            return
-        # NUEVO (memoria emocional): guardamos en segundo plano como se ve a la
-        # persona. SOLO la etiqueta y la hora: nunca fotos ni datos que la
-        # identifiquen. Es independiente del espejo empatico de abajo, para que
-        # el recuerdo se forme aunque YUE este hablando u ocupada.
-        self._log_camera_mood(observation)
-        # NUEVO (YUE habla al ver tu emoción): si detecta una emoción MUY fuerte y
-        # sostenida, o distrés sostenido (peligro), te lo comenta en voz y te
-        # pregunta por qué estás así. Muy racionado (no habla a cada gesto). Va
-        # ANTES del espejo empático (que solo pone cara) y es independiente de él.
-        try:
-            self._maybe_camera_emotion_checkin(observation)
-        except Exception as exc:
-            print("[camara] fallo evaluando el comentario emocional:", exc)
-        # ESPEJO EMPÁTICO (reescrito): la cámara pasa de DECIDIR a REPORTAR.
-        #
-        # Antes esto llamaba a `_set_avatar_emotion(...)` directamente, así que
-        # una cara mal leída cambiaba el estado de YUE sin que nada pudiera
-        # contradecirla. Ahora la cámara solo dice:
-        #
-        #     "creo que el usuario parece triste, con confianza 0.63"
-        #
-        # y el gestor decide. Si el usuario acaba de ESCRIBIR que está triste,
-        # el texto (peso 1.00) manda sobre la cámara (peso 0.55) y no hay
-        # conflicto. Y si el usuario dice que está bien mientras la cámara ve
-        # agotamiento, eso queda como emoción SECUNDARIA: no se tira el dato,
-        # pero tampoco se le lleva la contraria a la persona.
-        if not bool(getattr(config, "CAMERA_EMPATHY_ENABLED", True)):
-            return
-        emociones = getattr(observation, "person_emotions", ()) or ()
-        if not emociones:
-            return
-        # Nos quedamos con la emoción no neutra de mayor confianza.
-        fuertes = [e for e in emociones if getattr(e, "key", "neutral") != "neutral"]
-        if not fuertes:
-            return
-        mejor = max(fuertes, key=lambda e: getattr(e, "confidence", 0.0))
-        confianza = float(getattr(mejor, "confidence", 0.0))
-        if confianza < float(getattr(config, "CAMERA_EMPATHY_MIN_CONFIDENCE", 0.55)):
-            return
-
-        # Cuentagotas: solo al cambiar de ánimo y no más de una vez cada X seg.
-        # La cámara analiza ~una vez por segundo; sin esto inundaría la fusión.
-        ahora = time.time()
-        ultima_key = getattr(self, "_last_empathy_key", "")
-        ultima_at = float(getattr(self, "_last_empathy_at", 0.0))
-        gap = float(getattr(config, "CAMERA_EMPATHY_MIN_GAP", 8.0))
-        if mejor.key == ultima_key and (ahora - ultima_at) < gap:
-            return
-        self._last_empathy_key = mejor.key
-        self._last_empathy_at = ahora
-
-        # 1) OBSERVACIÓN: siempre se reporta, gobierne quien gobierne la cara.
-        #    Que la música esté sonando no significa que YUE deba dejar de
-        #    ENTERARSE de cómo está la persona; solo que no debe cambiar de cara.
-        gestor = getattr(self, "state_manager", None)
-        if gestor is not None:
-            try:
-                valencia, activacion = _valencia_activacion_camara(mejor.key)
-                gestor.observe_emotion(
-                    "camera", str(mejor.key), confianza,
-                    valence=valencia, arousal=activacion,
-                    explicit=False, detail="lectura facial")
-            except Exception as exc:
-                print("[camara] no pude registrar la observación:", exc)
-
-        # 2) PROPUESTA: solo si la cara está libre. Se mantienen las mismas
-        #    guardas de antes (multimedia, órdenes en curso, YUE hablando).
-        try:
-            if (getattr(self.audio, "media_playing", False) or self.controller_ctx.pc_busy
-                    or self.controller_ctx.vision_busy or self.speaker.is_speaking):
-                return
-        except Exception:
-            pass
-        try:
-            from core import face_emotion
-            espejo = face_emotion.empathic_avatar_emotion(mejor.key)
-        except Exception:
-            espejo = None
-        if not espejo:
-            return
-        nombre, inten, dur = espejo
-        try:
-            self._set_avatar_emotion(nombre, inten, dur,
-                                     priority=_PRIO_MEDIA, source="camara")
-        except Exception as exc:
-            print("[camara] no pude proponer el espejo empático:", exc)
-
-    def _log_camera_mood(self, observation):
-        """Registra en mood_log la emoción NO neutra leída por la cámara.
-
-        Privacidad por diseño: NO se guarda ninguna imagen ni dato identificable,
-        solo la etiqueta emocional, su confianza y la hora. Lleva su propio
-        cuentagotas para que el historial tenga sentido sin inflarse fotograma a
-        fotograma (la cámara analiza ~una vez por segundo).
-        """
-        try:
-            emociones = getattr(observation, "person_emotions", ()) or ()
-            fuertes = [e for e in emociones if getattr(e, "key", "neutral") != "neutral"]
-            if not fuertes:
-                return
-            mejor = max(fuertes, key=lambda e: getattr(e, "confidence", 0.0))
-            conf = float(getattr(mejor, "confidence", 0.0))
-            if conf < float(getattr(config, "CAMERA_MOOD_MIN_CONFIDENCE", 0.5)):
-                return
-            # Cuentagotas propio (independiente del espejo empático): registra al
-            # cambiar de emoción o cuando pasó suficiente tiempo del mismo ánimo.
-            ahora = time.time()
-            ultima_key = getattr(self, "_last_mood_cam_key", "")
-            ultima_at = float(getattr(self, "_last_mood_cam_at", 0.0))
-            gap = float(getattr(config, "CAMERA_MOOD_MIN_GAP", 45.0))
-            if mejor.key == ultima_key and (ahora - ultima_at) < gap:
-                return
-            self._last_mood_cam_key = mejor.key
-            self._last_mood_cam_at = ahora
-            self.memory.add_mood("camara", mejor.key, conf, None)
-        except Exception as exc:
-            print("[mood] no pude registrar el ánimo de la cámara:", exc)
-
-    # ---------- YUE HABLA al ver tu emoción por la cámara ----------
-    def _maybe_camera_emotion_checkin(self, observation):
-        """Si YUE ve una emoción MUY fuerte y sostenida —o distrés sostenido, que
-        tratamos como "peligro"—, te lo comenta EN VOZ y te pregunta por qué estás
-        así, con su propio tono.
-
-        Muy racionado a propósito (la petición era: que NO hable a cada gesto):
-          · La emoción tiene que ser fuerte (confianza alta) Y mantenerse varias
-            lecturas seguidas (racha), no un gesto de un segundo.
-          · Cuentagotas global (no habla más de una vez cada pocos minutos) y por
-            misma emoción (no repite el mismo ánimo hasta bastante después).
-          · El "peligro" (distrés sostenido de varios minutos) tiene prioridad: usa
-            un tono más cuidadoso y salta aunque no se cumpla la racha corta.
-          · Respeta todos los cortes de cortesía existentes: no pisa su propia voz,
-            ni interrumpe si escribes, ni durante media/orden de PC/visión o clase.
-        A prueba de fallos: ante cualquier error no dice nada.
-        """
-        if not bool(getattr(config, "CAMERA_EMOTION_TALK_ENABLED", True)):
-            return
-        # Cortes de cortesía (mismos que usa el resto de iniciativas de YUE).
-        try:
-            if (self.speaker.is_speaking or self.chat.is_user_composing()
-                    or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy
-                    or getattr(self.audio, "media_playing", False)
-                    or getattr(self, "_autonomy_busy", False)
-                    or getattr(self, "_emotion_talk_pending", False)):
-                return
-            if (getattr(self.controller_ctx, "modes", None) is not None
-                    and self.controller_ctx.modes.current_mode() == MODE_TEACHER):
-                return
-        except Exception:
-            return
-
-        ahora = time.time()
-
-        # ¿Peligro? = distrés (tristeza/tensión) SOSTENIDO durante varios minutos.
-        peligro = False
-        try:
-            peligro = bool(self.camera.risk_signal())
-        except Exception:
-            peligro = False
-
-        # Mejor emoción NO neutra de este fotograma (para el caso "muy fuerte").
-        emociones = getattr(observation, "person_emotions", ()) or ()
-        fuertes = [e for e in emociones if getattr(e, "key", "neutral") != "neutral"]
-        mejor = max(fuertes, key=lambda e: getattr(e, "confidence", 0.0)) if fuertes else None
-        conf = float(getattr(mejor, "confidence", 0.0)) if mejor else 0.0
-        min_conf = float(getattr(config, "CAMERA_EMOTION_TALK_MIN_CONFIDENCE", 0.72))
-
-        # Racha: contamos lecturas seguidas de la MISMA emoción fuerte para no
-        # reaccionar a un gesto puntual. Se reinicia si cambia o baja la confianza.
-        min_streak = max(1, int(getattr(config, "CAMERA_EMOTION_TALK_MIN_STREAK", 3)))
-        prev_key = getattr(self, "_emotion_talk_streak_key", "")
-        if mejor is not None and conf >= min_conf:
-            if mejor.key == prev_key:
-                self._emotion_talk_streak = int(getattr(self, "_emotion_talk_streak", 0)) + 1
-            else:
-                self._emotion_talk_streak_key = mejor.key
-                self._emotion_talk_streak = 1
-        else:
-            self._emotion_talk_streak_key = ""
-            self._emotion_talk_streak = 0
-        racha = int(getattr(self, "_emotion_talk_streak", 0))
-
-        # ¿Toca hablar? Peligro, o emoción fuerte con racha suficiente.
-        emocion_fuerte = mejor is not None and conf >= min_conf and racha >= min_streak
-        if not (peligro or emocion_fuerte):
-            return
-
-        # Elegimos la clave a comentar: si hay peligro, priorizamos la emoción
-        # negativa que lo provoca; si no, la emoción fuerte del momento.
-        key = (getattr(mejor, "key", "") if mejor is not None else "") or "neutral"
-        if peligro and (mejor is None or mejor.key not in ("triste", "molesta")):
-            key = "triste"  # el distrés sostenido se lee como tristeza/tensión
-
-        # Cuentagotas GLOBAL (no habla seguido) y por MISMA emoción (no repite el
-        # mismo ánimo pronto). El peligro relaja el corte por misma emoción, pero
-        # sigue respetando el global para no volverse una alarma.
-        min_gap = float(getattr(config, "CAMERA_EMOTION_TALK_MIN_GAP", 240.0))
-        same_gap = float(getattr(config, "CAMERA_EMOTION_TALK_SAME_GAP", 900.0))
-        ultima_at = float(getattr(self, "_last_emotion_talk_at", 0.0))
-        if (ahora - ultima_at) < min_gap:
-            return
-        if not peligro:
-            ultima_key = getattr(self, "_last_emotion_talk_key", "")
-            ultima_same = float(getattr(self, "_last_emotion_talk_same_at", 0.0))
-            if key == ultima_key and (ahora - ultima_same) < same_gap:
-                return
-
-        # A partir de aquí SÍ hablamos: fijamos cuentagotas y reiniciamos la racha
-        # para no encadenar comentarios.
-        self._last_emotion_talk_at = ahora
-        self._last_emotion_talk_key = key
-        self._last_emotion_talk_same_at = ahora
-        self._emotion_talk_streak = 0
-        self._emotion_talk_streak_key = ""
-
-        self._deliver_emotion_checkin(key, peligro)
-
-    def _deliver_emotion_checkin(self, key, peligro):
-        """Genera con el LLM (en el tono de YUE) el comentario/pregunta sobre la
-        emoción vista y lo dice en voz. Si el LLM no está, usa una frase de
-        respaldo para no quedarse muda. Aditivo y a prueba de fallos."""
-        from core import face_emotion
-        # Marcamos pendiente para no lanzar dos a la vez (se limpia al terminar).
-        self._emotion_talk_pending = True
-        try:
-            hint = face_emotion.talk_prompt_hint(key)
-            current = self._refresh_bond()
-            # Si hay peligro, inyectamos la directiva suave de cuidado (la misma que
-            # usa el flujo por texto), para que acompañe con tacto.
-            directive = None
-            if peligro:
-                try:
-                    directive = safety.safety_directive_visual(config.CRISIS_RESOURCES)
-                except Exception:
-                    directive = None
-            system = self._system_prompt(current, directive)
-            if peligro:
-                encargo = (
-                    "IMPORTANTE: por la cámara notas que la persona lleva un buen rato "
-                    f"con una expresión de que algo va mal ({hint}). No es un gesto "
-                    "puntual, se ha mantenido. Con cariño y tu estilo (baja un poco el "
-                    "tono tsundere aquí, sin dramatizar), dile que la ves así y "
-                    "pregúntale qué le pasa o si está bien. UNA o dos frases, natural, "
-                    "en español mexicano. No inventes qué le pasó; solo pregunta."
-                )
-            else:
-                encargo = (
-                    f"Por la cámara acabas de notar que a la persona {hint}. "
-                    "Coméntaselo y pregúntale por qué está así, con tu estilo tsundere "
-                    "juguetón (te importa aunque lo disimules). UNA o dos frases como "
-                    "mucho, natural y en español mexicano. No inventes el motivo; solo "
-                    "pregúntale."
-                )
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": encargo},
-            ]
-            respaldo = face_emotion.talk_fallback_line(key, riesgo=peligro)
-            worker = AiWorker(self.engine, messages)
-            worker.done.connect(lambda answer, k=key: self._on_emotion_talk_done(k, answer))
-            worker.failed.connect(
-                lambda _error, d=respaldo: self._on_emotion_talk_done(key, d)
-            )
-            self.controller_ctx.workers.track(worker)
-        except Exception as exc:
-            print("[camara] no pude preparar el comentario emocional:", exc)
-            self._emotion_talk_pending = False
-            try:
-                self._on_emotion_talk_done(key, face_emotion.talk_fallback_line(key, riesgo=peligro))
-            except Exception:
-                pass
-
-    def _on_emotion_talk_done(self, key, text):
-        """Dice en voz el comentario emocional y lo deja en memoria como turno de
-        YUE, para que tu respuesta ('estoy triste porque…') fluya con contexto."""
-        self._emotion_talk_pending = False
-        try:
-            clean = emotion.clean_response(text or "")
-            if not clean.strip():
-                clean = None
-            # Vuelve a comprobar cortesía: si mientras pensaba empezaste a hablar o
-            # a escribir, no te pisamos; el momento ya pasó.
-            if (self.speaker.is_speaking or self.chat.is_user_composing()
-                    or self.controller_ctx.pc_busy or self.controller_ctx.vision_busy):
-                return
-            if not clean:
-                return
-            try:
-                self.memory.add_message("assistant", clean)
-            except Exception:
-                pass
-            self._yue_say(clean, "camara-emocion")
-        except Exception as exc:
-            print("[camara] no pude decir el comentario emocional:", exc)
+        self.vision_director.vision_preflight()
 
     def _describe_audio(self):
         """Responde a «¿qué tal la música / qué escuchas / qué te pareció?» diciendo
