@@ -12,7 +12,9 @@ Extrae de Controller el despacho de comandos (`_handle_command`) y los
 
 Direcciones del paquete:
 - main -> director (público): handle_command (publicado como ctx.handle_command).
-- director -> ctx (dependencias): say, chat, memory, memory_proactive,
+- director -> ctx (dependencias): say (publicado), chat_set_status (publicado),
+  publish_companion_state, avatar_emotion, last_companion, last_user_text,
+  speaker, listener, chat, state_manager, memory, memory_proactive,
   pc, pc_director, list_routines, show_activity, glance, vision_director,
   vision_mp, voice, autonomy, autonomy_director, head_control, modes,
   apply_mode_switch, teacher, workers, system_context, camera.
@@ -20,10 +22,59 @@ Direcciones del paquete:
 """
 from __future__ import annotations
 
+from core import emotion
+from core.state import Priority as _StatePriority
+
+_PRIO_CONVERSACION = int(_StatePriority.CONVERSATION)  # 70
+
 
 class DialogueDirector:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
+        # PUBLICACIÓN (traspaso de dueño, NOTA de §4.1): el diálogo es dueño
+        # de «decir» (ctx.say) y de mostrar estado en el chat
+        # (ctx.chat_set_status). Los consumidores siguen leyendo el mismo canal.
+        self.ctx.say = self.say
+        self.ctx.chat_set_status = self.set_status
+
+    def say(self, text, user_context=None):
+        import config
+        # La emoción del avatar se infiere del texto CRUDO (con toda su señal
+        # emocional); el texto que se dice/habla va limpio. Así la emoción vive
+        # en la cara y el cuerpo, nunca en las palabras.
+        clean = emotion.clean_response(text)
+
+        # Si este turno pasó por el cerebro afectivo, la cara de YUE ya está
+        # decidida por CompanionExpressionPolicy —que responde a lo que le pasa
+        # al usuario en vez de imitarlo— y se REFRESCA para que dure toda la
+        # respuesta; si no, se infiere del texto (como en el maestro).
+        resultado = self.ctx.last_companion
+        if resultado is not None:
+            self.ctx.publish_companion_state(resultado)
+        else:
+            state = emotion.infer_conversation_state(
+                user_context or getattr(self.ctx, "last_user_text", ""), text)
+            self.ctx.avatar_emotion(state.name, state.intensity, state.duration_ms,
+                                    priority=_PRIO_CONVERSACION, source="conversacion")
+        # Por defecto YUE solo habla. Muestra el texto únicamente si se pidió
+        # (CHAT_MOSTRAR_RESPUESTAS) o si la voz está apagada (para no callar).
+        mostrar = bool(getattr(config, "CHAT_MOSTRAR_RESPUESTAS", False)) or not self.ctx.speaker.enabled
+        if mostrar:
+            self.ctx.chat.show_reply(clean)
+        if self.ctx.speaker.enabled:
+            self.ctx.listener.set_tts_text(clean)
+        # SYSTEM STATE: la voz pasa a "speaking" ANTES de hablar (campo que el
+        # latido solo refrescaba cada 250 ms; los módulos que consultan si se
+        # puede hablar leían un dato falso justo al inicio de cada frase).
+        try:
+            if self.ctx.state_manager is not None:
+                self.ctx.state_manager.update_system(voice="speaking")
+        except Exception:
+            pass
+        self.ctx.speaker.say(clean)
+
+    def set_status(self, text):
+        self.ctx.chat.set_status(text)
 
     # ---------- despacho de comandos ----------
     def handle_command(self, text):
@@ -36,15 +87,15 @@ class DialogueDirector:
         elif command in {"/actividad", "/bitacora"}:
             self.ctx.show_activity()
         elif command in {"/reescanear_apps", "/reescanear-apps", "/apps"}:
-            self.ctx.chat.set_status("Reescaneando aplicaciones instaladas…")
+            self.ctx.chat_set_status("Reescaneando aplicaciones instaladas…")
             from engine.pc_worker import AppScanWorker
             worker = AppScanWorker(self.ctx.pc)
             worker.done.connect(lambda result: (
-                self.ctx.chat.set_status(""),
+                self.ctx.chat_set_status(""),
                 self.ctx.say(f"Catálogo actualizado: encontré {result.get('count', 0)} aplicaciones.")
             ))
             worker.failed.connect(lambda error: (
-                self.ctx.chat.set_status(""),
+                self.ctx.chat_set_status(""),
                 self.ctx.say(f"No pude reescanear las aplicaciones: {error}")
             ))
             self.ctx.workers.track(worker)

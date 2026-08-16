@@ -254,7 +254,7 @@ class TeacherDirector:
             self.ctx.say("Quería leer eso, pero no pude: " + (src.note or "formato no disponible"))
             return
         if src is not None and src.ok:
-            self.ctx.chat.set_status(f"Leí el material ({src.kind}). Preparando la clase…")
+            self.ctx.chat_set_status(f"Leí el material ({src.kind}). Preparando la clase…")
             # NUEVO: construye la representación interna del material (§2/§3) y lo
             # registra en la memoria de la clase (§5). Aditivo y a prueba de fallos.
             try:
@@ -265,7 +265,7 @@ class TeacherDirector:
 
         messages = self.teacher.build_messages(text)
         request_id = self.ctx.chat_request_id
-        self.ctx.chat.set_status("La profesora está preparando la clase…")
+        self.ctx.chat_set_status("La profesora está preparando la clase…")
         worker = AiWorker(self.ctx.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
         worker.failed.connect(lambda error, rid=request_id: self.ctx.ai_failed(rid, error))
@@ -363,7 +363,7 @@ class TeacherDirector:
             system = self.teacher.build_system_prompt()
             instruccion = self.teacher.build_page_vision_instruction(material)
             request_id = self.ctx.chat_request_id
-            self.ctx.chat.set_status(
+            self.ctx.chat_set_status(
                 f"Observando la página {material['page_no']}/{material['total']} (imagen)…")
             worker = PdfPageVisionWorker(self.ctx.engine, system, instruccion, material["image"])
             worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
@@ -380,7 +380,7 @@ class TeacherDirector:
         estado = f"Explicando la página {material['page_no']}/{material['total']}"
         if material.get("source") == "ocr":
             estado += " (escaneada, leída con OCR)"
-        self.ctx.chat.set_status(estado + "…")
+        self.ctx.chat_set_status(estado + "…")
         worker = AiWorker(self.ctx.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
         worker.failed.connect(lambda error, rid=request_id: self.ctx.ai_failed(rid, error))
@@ -407,7 +407,7 @@ class TeacherDirector:
     def _on_teacher_done(self, request_id, text):
         if request_id != self.ctx.chat_request_id:
             return
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         # Extrae y registra la evaluación oculta (si la hay) y limpia el texto.
         clean, evals = self.teacher.process_reply(text)
         if not clean:
@@ -570,7 +570,7 @@ class TeacherDirector:
         messages = teacher_assistant.build_messages(
             spec, text, material=material, memory_hint=memoria, style_hint=estilo)
         request_id = self.ctx.chat_request_id
-        self.ctx.chat.set_status(f"Preparando {spec.label}…")
+        self.ctx.chat_set_status(f"Preparando {spec.label}…")
         worker = AiWorker(self.ctx.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_assist_done(rid, answer, spec))
         worker.failed.connect(lambda error, rid=request_id: self.ctx.ai_failed(rid, error))
@@ -579,7 +579,7 @@ class TeacherDirector:
     def _on_teacher_assist_done(self, request_id, text, spec):
         if request_id != self.ctx.chat_request_id:
             return
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         salida = (text or "").strip() or f"No pude preparar {spec.label} esta vez."
         # Recordatorio de rol: YUE asiste, no reemplaza al docente (§12/§15). Solo
         # para la corrección, que es donde importa la decisión final del profesor.
@@ -615,7 +615,7 @@ class TeacherDirector:
             text, decision, recent_context=contexto, style_hint=estilo)
         self.teacher_participation.note_intervened()
         request_id = self.ctx.chat_request_id
-        self.ctx.chat.set_status("Yue va a aportar algo a la clase…")
+        self.ctx.chat_set_status("Yue va a aportar algo a la clase…")
         worker = AiWorker(self.ctx.engine, messages)
         worker.done.connect(lambda answer, rid=request_id: self._on_teacher_done(rid, answer))
         worker.failed.connect(lambda error, rid=request_id: self.ctx.ai_failed(rid, error))

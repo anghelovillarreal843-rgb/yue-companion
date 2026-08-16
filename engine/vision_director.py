@@ -170,7 +170,7 @@ class VisionDirector:
             "menciona solo lo relevante para la petición explícita del usuario."
         )
         self.ctx.vision_busy = True
-        self.ctx.chat.set_status("Yue está mirando tu pantalla…")
+        self.ctx.chat_set_status("Yue está mirando tu pantalla…")
         # ADITIVO: si se pidió visión-solo-OCR de forma EXPLÍCITA, seguimos con el
         # camino OCR de siempre. En cualquier otro caso usamos el flujo completo
         # (captura -> clasificación -> VisionRouter -> fallback OCR), que YA
@@ -212,7 +212,7 @@ class VisionDirector:
 
     def on_vision_done(self, text):
         self.ctx.vision_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         if text:
             self.ctx.say(text)
         else:
@@ -220,7 +220,7 @@ class VisionDirector:
 
     def on_vision_failed(self, error):
         self.ctx.vision_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         # Antes esto solo se imprimía y parecía que "la visión no funciona".
         print("[vision] error:", error)
         msg = str(error or "")
@@ -261,13 +261,13 @@ class VisionDirector:
             self.ctx.chat.show_reply("🔎 Diagnóstico de visión en curso… (captura y modelo)")
         except Exception:
             pass
-        self.ctx.chat.set_status("Diagnosticando la visión…")
+        self.ctx.chat_set_status("Diagnosticando la visión…")
         worker = VisionDiagWorker(self.ctx.engine)
         worker.done.connect(self.on_vision_diag)
         self.ctx.workers.track(worker)
 
     def on_vision_diag(self, report):
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         lineas = ["🔎 Diagnóstico de visión:"]
         todo_ok = True
         for nombre, ok, detalle in report:

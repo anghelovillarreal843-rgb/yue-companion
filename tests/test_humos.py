@@ -122,12 +122,43 @@ def test_humano_routing_comandos_con_director(controller):
     director.handle_command("/modo")
 
 
+def test_humano_10_2_el_dialogo_publica_say_y_chat_set_status(controller, monkeypatch):
+    """10.2 TRASPASO: ctx.say y ctx.chat_set_status los publica DialogueDirector.
+    El diálogo del maestro (on_user_message) sale por el canal del director."""
+    director = controller.dialogue_director
+    assert controller.controller_ctx.say.__self__ is director
+    assert controller.controller_ctx.chat_set_status.__self__ is director
+    # un mensaje normal debe hablar por el canal (emitido por el director)
+    hablado = []
+    tts = []
+    mostrado = []
+    monkeypatch.setattr(controller.speaker, "say", hablado.append)
+    monkeypatch.setattr(controller.listener, "set_tts_text", tts.append)
+    # el chat de la UI es el real; solo capturamos reply para no abrir ventanas
+    controller.controller_ctx.chat.show_reply = lambda t: mostrado.append(t)
+    controller.on_user_message("Hola, Yue.")
+    import time
+    for _ in range(20):
+        if hablado:
+            break
+        time.sleep(0.1)
+        QApplication.processEvents()
+    assert hablado, "el turno habla por speaker"
+    assert tts, "el turno pasa por el TTS del listener"
+    # y el status del diálogo va por el canal del director
+    statuses = []
+    controller.controller_ctx.chat.set_status = lambda t: statuses.append(t)
+    director.handle_command("/reescanear_apps")  # dispara un set_status del director
+    assert statuses, "el director publica el estado por ctx.chat_set_status"
+
+
 def test_humano_routing_no_dejo_restos_del_maestro(controller):
     """El maestro ya no tiene _handle_command ni _diagnose_vision."""
     import main as m
     assert not hasattr(m.Controller, "_handle_command")
     assert not hasattr(m.Controller, "_diagnose_vision")
     assert controller.dialogue_director is controller.controller_ctx.handle_command.__self__
+    assert not hasattr(m.Controller, "_yue_say")
 
 
 def test_humano_routing_en_vivo_huérfanos_entregan_servicio(controller, monkeypatch):
@@ -136,8 +167,7 @@ def test_humano_routing_en_vivo_huérfanos_entregan_servicio(controller, monkeyp
     director = controller.dialogue_director
     emitidos = []
     monkeypatch.setattr(controller.controller_ctx, "say", emitidos.append)
-    monkeypatch.setattr(controller, "_yue_say", emitidos.append)
-
+    
     # /recuerda -> memoria real (el hecho debe quedar guardado)
     antes = len(controller.controller_ctx.memory.get_facts(500))
     director.handle_command("/recuerda Detalle para la prueba 10_1")

@@ -50,19 +50,19 @@ class PCDirector:
             return
         self.ctx.pc_busy = True
         self._instruction = instruction      # la necesitan los hooks de aprendizaje
-        self.ctx.chat.set_status("Yue está comprendiendo y planificando la orden…")
+        self.ctx.chat_set_status("Yue está comprendiendo y planificando la orden…")
         self.ctx.avatar_emotion("focused", 0.95, 9000,
                                 priority=self.ctx.avatar_conversation_priority,
                                 source="control_pc")
         worker = PCWorker(self.ctx.pc, self.ctx.engine, instruction)
-        worker.progress.connect(self.ctx.chat.set_status)
+        worker.progress.connect(self.ctx.chat_set_status)
         worker.done.connect(self.on_pc_done)
         worker.failed.connect(self.on_pc_failed)
         self.ctx.workers.track(worker)
 
     def on_pc_done(self, result):
         self.ctx.pc_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         # NUEVO (recuperación): recuerda este bloque para "deshacer"/"repetir",
         # también si vino de una receta aprendida (que no pasa por execute()).
         try:
@@ -93,7 +93,7 @@ class PCDirector:
 
     def on_pc_failed(self, error):
         self.ctx.pc_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         # --- aprendizaje: guarda el fallo y pide la reflexión en segundo plano ---
         try:
             from core.learning import integration as learning
@@ -110,7 +110,7 @@ class PCDirector:
             self.ctx.say("Espera a que termine lo de ahora y enseguida te lo deshago.")
             return
         self.ctx.pc_busy = True
-        self.ctx.chat.set_status("Deshaciendo lo último…")
+        self.ctx.chat_set_status("Deshaciendo lo último…")
         worker = PCRecoveryWorker(self.ctx.pc, "undo")
         worker.done.connect(self.on_undo_done)
         worker.failed.connect(self.on_recovery_failed)
@@ -118,7 +118,7 @@ class PCDirector:
 
     def on_undo_done(self, res):
         self.ctx.pc_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         if res.get("undone"):
             accion = res.get("action", "lo último")
             self.ctx.say(f"Hecho, deshice {accion}.")
@@ -139,19 +139,19 @@ class PCDirector:
             self.ctx.say("Ya hay algo en curso; cuando termine te lo repito.")
             return
         self.ctx.pc_busy = True
-        self.ctx.chat.set_status("Repitiendo lo último…")
+        self.ctx.chat_set_status("Repitiendo lo último…")
         self.ctx.avatar_emotion("focused", 0.9, 6000,
                                 priority=self.ctx.avatar_conversation_priority,
                                 source="control_pc")
         worker = PCRecoveryWorker(self.ctx.pc, "repeat")
-        worker.progress.connect(self.ctx.chat.set_status)
+        worker.progress.connect(self.ctx.chat_set_status)
         worker.done.connect(self.on_repeat_done)
         worker.failed.connect(self.on_recovery_failed)
         self.ctx.workers.track(worker)
 
     def on_repeat_done(self, res):
         self.ctx.pc_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         if not res.get("repeated"):
             motivo = str(res.get("reason", ""))
             if "no tengo" in motivo:
@@ -168,7 +168,7 @@ class PCDirector:
 
     def on_recovery_failed(self, error):
         self.ctx.pc_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         self.ctx.say(f"No pude completar eso: {error}")
 
     def run_routine(self, nombre):
@@ -188,19 +188,19 @@ class PCDirector:
             return
         self.ctx.pc_busy = True
         self._instruction = f"rutina: {rutina['nombre']}"
-        self.ctx.chat.set_status(f"Ejecutando la rutina «{rutina['nombre']}»…")
+        self.ctx.chat_set_status(f"Ejecutando la rutina «{rutina['nombre']}»…")
         self.ctx.avatar_emotion("focused", 0.9, 8000,
                                 priority=self.ctx.avatar_conversation_priority,
                                 source="control_pc")
         worker = PCRecoveryWorker(self.ctx.pc, "routine", actions=rutina["pasos"], label=rutina["nombre"])
-        worker.progress.connect(self.ctx.chat.set_status)
+        worker.progress.connect(self.ctx.chat_set_status)
         worker.done.connect(self.on_routine_done)
         worker.failed.connect(self.on_recovery_failed)
         self.ctx.workers.track(worker)
 
     def on_routine_done(self, res):
         self.ctx.pc_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         # Aprendizaje: refuerza/crea receta si todo salió bien (igual que una orden).
         try:
             from core.learning import integration as learning
@@ -236,7 +236,7 @@ class PCDirector:
 
     def do_confirm_ask(self, question: str):
         """Habla la pregunta de confirmación (siempre en el hilo principal)."""
-        self.ctx.chat.set_status("Esperando tu «sí» o «no»…")
+        self.ctx.chat_set_status("Esperando tu «sí» o «no»…")
         self.ctx.say(question)
 
     def resolve_pc_confirmation(self, text: str):
@@ -254,7 +254,7 @@ class PCDirector:
             return  # ya resuelto (p. ej. dos respuestas seguidas)
         pending["holder"]["result"] = verdict
         pending["event"].set()
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         # Un reconocimiento breve; el resultado final de la orden lo confirmará.
         self.ctx.say("Vale, lo hago." if verdict else "Vale, lo dejo así.")
 

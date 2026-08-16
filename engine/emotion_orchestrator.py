@@ -38,6 +38,9 @@ class EmotionOrchestrator:
         # orquestador desde YA, no Controller. Consumidores (Vision, PC,
         # Teacher) leían ctx.avatar_emotion y siguen leyendo el mismo canal.
         self.ctx.avatar_emotion = self.set_avatar_emotion
+        # Refresco del estado ya decidido (lo usa DialogueDirector.say cuando
+        # el turno pasó por el cerebro afectivo; dueño: este orquestador).
+        self.ctx.publish_companion_state = self.publish_companion_state
 
     # ==================================================================
     # CEREBRO CENTRAL: latido, estado del sistema y propuestas

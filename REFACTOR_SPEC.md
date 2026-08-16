@@ -307,15 +307,18 @@ CameraObserver.start = lambda self: None; CameraObserver.stop = lambda self: Non
 main.VoiceListener.start = lambda self: None
 main.SystemAudioReactor.start = lambda self: None
 from PyQt5.QtWidgets import QApplication
-app = QApplication.instance() or QApplication([])
+app = QApplication.instance() or QApplication([])   # OJO: SIEMPRE con asignación
 ctrl = main.Controller()   # arranque real (wiring, directores, DB)
 ctrl.shutdown()
 ```
 
-⚠ ORDEN DEL IMPORT: crear `QApplication` ANTES de `import main` produce un `SIGABRT`
+⚠ ORDEN DEL IMPORT Y REFERENCIA DE QApp: crear `QApplication` ANTES de `import main`, o crearla
+SIN guardarla en una variable (p.ej. `QApplication([])` a secas), produce `SIGABRT`
 (`QMessageLogger::fatal` en el constructor de `QWidget`, verificado con gdb en cd90614 y
-posteriores — NO es SDL ni el hardware; es un detalle de inicialización sip/Qt del método
-manual). Con el orden de arriba el arranque manual funciona y sale limpio (rc=0, shutdown ok).
+posteriores — NO es SDL ni el hardware): sin referencia, el GC de Python destruye la
+`QApplication` mientras el arranque sigue, y el siguiente `QWidget` (DesktopPet, main.py)
+muere con «QWidget: Cannot create a QWidget without QApplication». Con el orden de arriba y la
+asignación, el arranque manual funciona y sale limpio (rc=0, shutdown ok).
 No es una regresión de ningún paso: el arranque real de la app es `python3 main.py`, que crea
 su `QApplication` en su orden interno y NO pasa por este camino. Si se toca algo en el arranque
 del `Controller` (orden de creación de directores, timers, audio), reproducir este patrón.

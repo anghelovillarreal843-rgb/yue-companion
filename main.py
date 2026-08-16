@@ -381,7 +381,6 @@ class Controller(QObject):
         self.controller_ctx.chat = self.chat
         self.controller_ctx.pet = self.pet
         self.controller_ctx.state_manager = self.state_manager
-        self.controller_ctx.say = self._yue_say
         self.controller_ctx.user_message = self.on_user_message
         # PR 5.4: PCDirector (~16 métodos del paquete PC) vive en engine/.
         self.controller_ctx.pc = self.pc
@@ -616,46 +615,6 @@ class Controller(QObject):
         # NUEVO: cualquier interrupción cancela un auto-avance de página pendiente.
         self.controller_ctx.teacher_autoadvance_pending = False
 
-    def _yue_say(self, text, user_context=None):
-        # La emoción del avatar se infiere del texto CRUDO (con toda su señal
-        # emocional); el texto que se dice/habla va limpio. Así la emoción vive
-        # en la cara y el cuerpo, nunca en las palabras.
-        clean = emotion.clean_response(text)
-
-        # NUEVO: si este turno pasó por el cerebro afectivo, la cara de YUE ya
-        # está decidida por CompanionExpressionPolicy —que responde a lo que le
-        # pasa al usuario en vez de imitarlo— y se REFRESCA aquí para que dure
-        # toda la respuesta. Antes se recalculaba desde el texto de YUE, que es
-        # justo lo que hacía que un usuario furioso acabara con un avatar
-        # furioso.
-        resultado = self.controller_ctx.last_companion
-        if resultado is not None:
-            # Se REPROPONE para refrescar el TTL: la cara debe durar toda la
-            # respuesta. La decisión en sí ya la tomó `_publish_companion_state`.
-            self.emotion_orchestrator.publish_companion_state(resultado)
-        else:
-            state = emotion.infer_conversation_state(
-                user_context or getattr(self, "_last_user_text", ""), text)
-            self.emotion_orchestrator.set_avatar_emotion(state.name, state.intensity, state.duration_ms,
-                                     priority=_PRIO_CONVERSACION, source="conversacion")
-        # NUEVO: por defecto YUE solo habla. Muestra el texto únicamente si se
-        # pidió (CHAT_MOSTRAR_RESPUESTAS) o si la voz está apagada (para no callar).
-        mostrar = bool(getattr(config, "CHAT_MOSTRAR_RESPUESTAS", False)) or not self.speaker.enabled
-        if mostrar:
-            self.chat.show_reply(clean)
-        if self.speaker.enabled:
-            self.listener.set_tts_text(clean)
-        # SYSTEM STATE: la voz pasa a "speaking" ANTES de hablar. Antes este
-        # campo solo se refrescaba en el latido, así que durante los primeros
-        # 250 ms de cada frase el estado decía que YUE estaba callada. Los
-        # módulos que consultan si pueden hablar leían un dato falso justo en
-        # el momento en que más importaba.
-        try:
-            if self.state_manager is not None:
-                self.state_manager.update_system(voice="speaking")
-        except Exception:
-            pass
-        self.speaker.say(clean)
 
     def _greet(self):
         current = self.emotion_orchestrator.refresh_bond()
@@ -664,7 +623,7 @@ class Controller(QObject):
             if current.index <= 1 else
             "Volviste. Bien… cuéntame qué haremos hoy."
         )
-        self._yue_say(message, "saludo")
+        self.controller_ctx.say(message, "saludo")
 
     def _system_prompt(self, bond_level, directive=None):
         # NUEVO (memoria a largo plazo): recuerdo consolidado de hace tiempo. Se
@@ -967,7 +926,7 @@ class Controller(QObject):
             if not stripped:
                 # Solo dijo/escribió «Yue» sin nada más: acusa recibo y espera.
                 self._interrupt_response()
-                self._yue_say("¿Sí? Dime.")
+                self.controller_ctx.say("¿Sí? Dime.")
                 return
             text = stripped
 
@@ -1040,7 +999,7 @@ class Controller(QObject):
             # a USER STATE; cómo reacciona YUE va como PROPUESTA al arbitraje.
             # La cara de YUE es una RESPUESTA a lo que le pasa al usuario, no
             # una imitación: un usuario furioso no pone a YUE furiosa.
-            self.emotion_orchestrator.publish_companion_state(resultado)
+            self.controller_ctx.publish_companion_state(resultado)
             if bool(getattr(config, "AFFECT_DEBUG", False)):
                 print("[affect]", resultado.summary)
                 try:
@@ -1112,7 +1071,7 @@ class Controller(QObject):
         if vision_awareness is not None:
             try:
                 if vision_awareness.asks_if_can_see(text):
-                    self._yue_say(vision_awareness.answer_can_see(self.controller_ctx.camera))
+                    self.controller_ctx.say(vision_awareness.answer_can_see(self.controller_ctx.camera))
                     return
             except Exception as exc:
                 print("[vision] no pude resolver «¿puedes verme?»:", exc)
@@ -1127,7 +1086,7 @@ class Controller(QObject):
             try:
                 respuesta_vision = self.vision_mp.handle_voice(text)
                 if respuesta_vision:
-                    self._yue_say(respuesta_vision)
+                    self.controller_ctx.say(respuesta_vision)
                     return
             except Exception as exc:
                 print("[vision] no pude procesar la orden de visión:", exc)
@@ -1214,15 +1173,16 @@ class Controller(QObject):
         # los acontecimientos de historia que se acaban de tocar, para que la
         # historia guarde la parte de YUE y no solo la de él.
         self.memory_proactive.story_note_response(clean)
-        # Pasamos el texto CRUDO: _yue_say limpia para hablar, pero infiere la
+        # Pasamos el texto CRUDO: el canal ctx.say (DialogueDirector) limpia para
+        # hablar, pero infiere la
         # emoción del avatar con toda la señal del modelo (no doble-limpiada).
-        self._yue_say(text, user_text)
+        self.controller_ctx.say(text, user_text)
 
     def _on_ai_failed(self, request_id, error):
         if request_id != self.controller_ctx.chat_request_id:
             return
         self.chat.set_status("")
-        self._yue_say("No logro conectarme con mi motor de IA. Revisa la clave de Groq y tu conexión.")
+        self.controller_ctx.say("No logro conectarme con mi motor de IA. Revisa la clave de Groq y tu conexión.")
         print("[IA] error:", error)
 
     # ---------- visión de pantalla ----------
@@ -1266,7 +1226,7 @@ class Controller(QObject):
 
         # Si no hay nada actual ni reciente NI letra captada, respondemos directo.
         if not ahora_suena and reciente is None and not lyrics:
-            self._yue_say(desc or "Ahora mismo no distingo nada sonando en tu PC. "
+            self.controller_ctx.say(desc or "Ahora mismo no distingo nada sonando en tu PC. "
                                   "Si quieres que te diga qué tal, ponlo a sonar un momento.")
             return
 
@@ -1310,7 +1270,7 @@ class Controller(QObject):
         # Si el modelo falla, al menos decimos la clasificación (no «no escucho nada»).
         respaldo = desc or (f"{cuando} sonaba {percibo}." if percibo else "")
         worker.done.connect(lambda answer, rid=request_id: self._on_ai_done(rid, "¿qué tal la música?", answer))
-        worker.failed.connect(lambda _error, d=respaldo: (self.chat.set_status(""), self._yue_say(d)))
+        worker.failed.connect(lambda _error, d=respaldo: (self.chat.set_status(""), self.controller_ctx.say(d)))
         self.controller_ctx.workers.track(worker)
 
     def _on_audio_status(self, text, active):
@@ -1416,12 +1376,12 @@ class Controller(QObject):
         """«Guarda esto como rutina X»: guarda el último plan ejecutado."""
         nombre = (nombre or "").strip()
         if not nombre:
-            self._yue_say("Dime un nombre para la rutina, por ejemplo «guárdalo como rutina correo».")
+            self.controller_ctx.say("Dime un nombre para la rutina, por ejemplo «guárdalo como rutina correo».")
             return
         rec = self.pc.last_executed
         pasos = (rec or {}).get("actions") if rec else None
         if not pasos:
-            self._yue_say(
+            self.controller_ctx.say(
                 "No tengo ninguna orden reciente que guardar. Pídeme primero que haga algo "
                 "y luego di «guarda esto como rutina» y el nombre."
             )
@@ -1429,10 +1389,10 @@ class Controller(QObject):
         try:
             self.memory.add_routine(nombre, pasos)
         except Exception as exc:
-            self._yue_say(f"No pude guardar la rutina: {exc}")
+            self.controller_ctx.say(f"No pude guardar la rutina: {exc}")
             return
         n = len(pasos)
-        self._yue_say(
+        self.controller_ctx.say(
             f"Guardado como rutina «{nombre}» ({n} paso{'s' if n != 1 else ''}). "
             f"Cuando quieras, solo di «ejecuta mi rutina {nombre}»."
         )
@@ -1441,13 +1401,13 @@ class Controller(QObject):
         """«Mis rutinas»: lista las guardadas."""
         rutinas = self.memory.list_routines()
         if not rutinas:
-            self._yue_say(
+            self.controller_ctx.say(
                 "Aún no tienes rutinas guardadas. Cuando haga algo por ti, di "
                 "«guarda esto como rutina» y un nombre, y lo reutilizamos con una frase."
             )
             return
         nombres = ", ".join(r["nombre"] for r in rutinas)
-        self._yue_say(
+        self.controller_ctx.say(
             f"{prefijo}Tienes {len(rutinas)} rutina{'s' if len(rutinas) != 1 else ''}: {nombres}. "
             "Di «ejecuta mi rutina» y el nombre para lanzarla."
         )
@@ -1460,15 +1420,15 @@ class Controller(QObject):
         except Exception as exc:
             print("[actividad] no pude leer el resumen:", exc)
         if resumen:
-            self._yue_say(resumen[0].upper() + resumen[1:])
+            self.controller_ctx.say(resumen[0].upper() + resumen[1:])
         else:
-            self._yue_say("Todavía no hay mucho en la bitácora de esta semana.")
+            self.controller_ctx.say("Todavía no hay mucho en la bitácora de esta semana.")
 
     def _on_vision_status(self, text, active):
         """Estado del sistema de visión por cámara (llega en el hilo de la UI).
 
         Aditivo y silencioso: solo registra en consola. Si quieres verlo en el
-        chat, cambia el print por self._yue_say(text).
+        chat, cambia el print por self.controller_ctx.say(text).
         """
         try:
             print(f"[vision-mp] {'ON' if active else 'off'}: {text}")

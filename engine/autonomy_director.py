@@ -81,7 +81,7 @@ class AutonomyDirector:
 
         self.ctx.autonomy_busy = True
         self._autonomy_started_at = self.ctx.last_user_activity
-        self.ctx.chat.set_status("Yue está preparando algo útil por iniciativa propia…")
+        self.ctx.chat_set_status("Yue está preparando algo útil por iniciativa propia…")
         messages = self.ctx.autonomy.build_prompt(
             self.ctx.memory.recent_messages(10),
             self.ctx.memory.get_facts(),
@@ -94,7 +94,7 @@ class AutonomyDirector:
 
     def _on_autonomy_done(self, text):
         self.ctx.autonomy_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         path = self.ctx.autonomy.save_creation(text)
         still_idle = (
             self.ctx.last_user_activity == self._autonomy_started_at
@@ -120,7 +120,7 @@ class AutonomyDirector:
 
     def _on_autonomy_failed(self, error):
         self.ctx.autonomy_busy = False
-        self.ctx.chat.set_status("")
+        self.ctx.chat_set_status("")
         print("[autonomia] error:", error)
 
     # ---------- acciones internas y comandos ----------
@@ -129,7 +129,7 @@ class AutonomyDirector:
             self.ctx.pc.cancel()
             self.ctx.speaker.stop()
             self.ctx.chat_request_id += 1
-            self.ctx.chat.set_status("")
+            self.ctx.chat_set_status("")
             self.ctx.say("Me detuve. Te escucho.")
         elif action == "pc_undo":
             self.ctx.pc_director.undo_last_pc()

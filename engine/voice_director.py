@@ -90,7 +90,7 @@ class VoiceDirector:
         """Mensaje ignorado por no empezar con «Yue». Aviso discreto (no hablado)."""
         if self.ctx.input_source == "texto":
             try:
-                self.ctx.chat.set_status("Empieza con «Yue…» para que te responda.")
+                self.ctx.chat_set_status("Empieza con «Yue…» para que te responda.")
             except Exception:
                 pass
         # Por voz no decimos nada: así no reacciona a conversaciones ajenas.
@@ -113,7 +113,7 @@ class VoiceDirector:
         self.ctx.avatar_emotion(
             "focused", 0.78, 2600,
             priority=self.ctx.avatar_conversation_priority, source="vision")
-        self.ctx.chat.set_status("Te escucho…")
+        self.ctx.chat_set_status("Te escucho…")
 
     def on_mic_status(self, message):
         if getattr(config, "DEBUG_STATUS", False):
