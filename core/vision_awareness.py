@@ -85,7 +85,7 @@ def _sees_person(camera) -> bool:
 def answer_can_see(camera) -> str:
     """Respuesta determinista a "¿puedes verme?" según el estado real.
 
-    - Cámara activa y con persona: sí, te veo (con guiño tsundere).
+    - Cámara activa y con persona: sí, te veo (con una sonrisa).
     - Cámara activa sin persona clara: la cámara está encendida, pero acércate /
       ponte de frente porque ahora mismo no te distingo bien. (No niega ver.)
     - Cámara desactivada en config: lo dice con franqueza.

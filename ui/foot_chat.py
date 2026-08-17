@@ -1,4 +1,7 @@
 """Chat flotante de Yue, optimizado para escritura continua y sin bloqueos."""
+import time
+from collections import deque
+
 from PyQt5.QtCore import (
     Qt, QPoint, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal,
 )
@@ -9,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ui import theme
+import config
 
 
 class ReliableLineEdit(QLineEdit):
@@ -25,6 +29,9 @@ class ReliableLineEdit(QLineEdit):
 
 class FootChat(QWidget):
     send_message = pyqtSignal(str)
+    # NUEVO: emitida al pulsar el boton mientras Yue está contestando: la
+    # respuesta en curso se corta (voz + generación) y el botón vuelve a ➤.
+    cancel_request = pyqtSignal()
     # NUEVO: emite las rutas de los archivos soltados sobre la ventanita del chat.
     files_dropped = pyqtSignal(list)
 
@@ -42,6 +49,10 @@ class FootChat(QWidget):
     DROP_EXTS = (".pdf", ".docx", ".pptx", ".epub", ".txt", ".md",
                  ".png", ".jpg", ".jpeg", ".bmp", ".webp")
 
+    # El deque guarda como mucho esta cantidad de envios recientes. Un poco
+    # mas que CHAT_ANTIDUP_MEM para que el contador de rafaga tenga contexto.
+    _SPAM_HIST_MAX = max(5, config.CHAT_ANTIDUP_MEM + 1)
+
     def __init__(self):
         super().__init__()
         # Titulo para que Yue reconozca sus propias ventanas (verificacion de pantalla).
@@ -56,6 +67,8 @@ class FootChat(QWidget):
         self.setMinimumHeight(180)
         self._pet_ref = None
         self._layout_pending = False
+        # Historial de envios (texto, timestamp) para el anti-saturacion.
+        self._historial_envios = deque(maxlen=self._SPAM_HIST_MAX)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 14, 14, 14)
@@ -69,13 +82,13 @@ class FootChat(QWidget):
         # Guardamos el estilo normal para poder resaltar el borde al arrastrar.
         self._card_style_normal = self.card.styleSheet()
         self._card_style_drag = (
-            f"QFrame#card{{background:{theme.GLASS};border:2px dashed {theme.CYAN};"
+            f"QFrame#card{{background:{theme.GLASS};border:2px dashed {theme.ACCENT};"
             "border-radius:18px;}"
         )
         glow = QGraphicsDropShadowEffect(self)
-        glow.setBlurRadius(28)
-        glow.setOffset(0, 0)
-        glow.setColor(QColor(125, 249, 255, 70))
+        glow.setBlurRadius(30)
+        glow.setOffset(0, 4)
+        glow.setColor(QColor(0, 0, 0, 110))
         self.card.setGraphicsEffect(glow)
         outer.addWidget(self.card)
 
@@ -84,13 +97,13 @@ class FootChat(QWidget):
         lay.setSpacing(7)
 
         self.bond_label = QLabel("🌑 Vínculo · nivel 1/10")
-        self.bond_label.setStyleSheet(f"color:{theme.VIOLET};background:transparent;")
+        self.bond_label.setStyleSheet(f"color:{theme.ACCENT2};background:transparent;")
         self.bond_label.setFont(QFont(theme.FONT_MONO, 9, QFont.Bold))
         lay.addWidget(self.bond_label)
 
         # NUEVO: indicador del MODO actual (🤍 Compañera / 📚 Profesora).
         self.mode_label = QLabel("🤍 Compañera")
-        self.mode_label.setStyleSheet(f"color:{theme.CYAN};background:transparent;")
+        self.mode_label.setStyleSheet(f"color:{theme.ACCENT};background:transparent;")
         self.mode_label.setFont(QFont(theme.FONT_MONO, 9, QFont.Bold))
         self.mode_label.setToolTip("Modo actual de YUE")
         lay.addWidget(self.mode_label)
@@ -99,8 +112,8 @@ class FootChat(QWidget):
         self.reply.setWordWrap(True)
         self.reply.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.reply.setStyleSheet(
-            f"color:{theme.TEXT};background:rgba(125,249,255,16);"
-            "border:1px solid rgba(125,249,255,70);border-radius:11px;padding:8px 11px;"
+            f"color:{theme.TEXT};background:rgba(185,163,232,24);"
+            "border:1px solid rgba(185,163,232,90);border-radius:11px;padding:8px 11px;"
         )
         self.reply.setFont(QFont(theme.FONT_UI, 10))
         self.reply.hide()
@@ -118,17 +131,46 @@ class FootChat(QWidget):
         self._reply_timer.timeout.connect(self._fade_reply)
 
         self.status = QLabel("")
-        self.status.setStyleSheet(f"color:{theme.CYAN};background:transparent;font-style:italic;")
+        self.status.setStyleSheet(f"color:{theme.TEXT_DIM};background:transparent;font-style:italic;")
         self.status.setFont(QFont(theme.FONT_UI, 9))
         self.status.hide()
         lay.addWidget(self.status)
+
+        # Indicador de "Yue está escribiendo": se enciende al enviar un mensaje
+        # y se apaga cuando llega la respuesta (o cualquier aviso del sistema).
+        self.thinking = QLabel("")
+        self.thinking.setStyleSheet(f"color:{theme.TEXT_DIM};background:transparent;font-style:italic;")
+        self.thinking.setFont(QFont(theme.FONT_UI, 9))
+        self.thinking.hide()
+        lay.addWidget(self.thinking)
+        self._think_timer = QTimer(self)
+        self._think_timer.setInterval(380)
+        self._think_timer.timeout.connect(self._think_tick)
+        self._think_dots = 1
+        # El boton de enviar se convierte en icono de carga mientras Yue
+        # contesta; pulsado en ese estado corta la respuesta (estilo
+        # opencode/ChatGPT: flecha ➤ -> spinner/stop).
+        self._busy = False
+        self._spinner_chars = ("◐", "◓", "◑", "◒")
+        self._spinner_i = 0
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.setInterval(130)
+        self._spinner_timer.timeout.connect(self._spinner_tick)
+        # Salvavidas: si la respuesta nunca llega (fallo de red/modelo), el
+        # boton vuelve a ➤ solo en vez de quedarse cargando toda la vida.
+        self._think_timeout = QTimer(self)
+        self._think_timeout.setSingleShot(True)
+        self._think_timeout.setInterval(90000)
+        self._think_timeout.timeout.connect(
+            lambda: self._stop_thinking() if self._busy else None
+        )
 
         self.pc_actions = QLabel("")
         self.pc_actions.setWordWrap(True)
         self.pc_actions.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.pc_actions.setStyleSheet(
-            f"color:{theme.TEXT};background:rgba(8,10,24,180);"
-            "border:1px solid rgba(125,249,255,45);border-radius:8px;padding:6px 8px;"
+            f"color:{theme.TEXT};background:{theme.BG0};"
+            f"border:1px solid {theme.LINE};border-radius:8px;padding:6px 8px;"
         )
         self.pc_actions.setFont(QFont(theme.FONT_MONO, 8))
         self.pc_actions.setToolTip("Últimas acciones de control del PC")
@@ -146,9 +188,9 @@ class FootChat(QWidget):
         self.input.setClearButtonEnabled(True)
         self.input.setFocusPolicy(Qt.StrongFocus)
         self.input.setStyleSheet(
-            f"QLineEdit{{background:rgba(10,8,24,235);color:{theme.TEXT};"
+            f"QLineEdit{{background:{theme.BG1};color:{theme.TEXT};"
             f"border:1px solid {theme.LINE};border-radius:13px;padding:9px 13px;}}"
-            f"QLineEdit:focus{{border:1px solid {theme.CYAN};}}"
+            f"QLineEdit:focus{{border:1px solid {theme.ACCENT};}}"
         )
         self.input.textEdited.connect(self._on_typing)
         self.input.submit.connect(self._on_send)
@@ -159,12 +201,12 @@ class FootChat(QWidget):
         self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.setToolTip("Enviar")
         self.send_btn.setStyleSheet(
-            f"QPushButton{{background:rgba(125,249,255,28);color:{theme.CYAN};"
-            f"border:1px solid {theme.LINE};border-radius:12px;font-size:16px;}}"
-            f"QPushButton:hover{{border:1px solid {theme.CYAN};background:rgba(125,249,255,45);}}"
-            "QPushButton:pressed{padding-top:2px;}"
+            f"QPushButton{{background:{theme.ACCENT};color:#1c1630;"
+            "border:none;border-radius:12px;font-size:16px;}"
+            f"QPushButton:hover{{background:#c7b4f0;}}"
+            f"QPushButton:pressed{{background:#a08ed0;padding-top:2px;}}"
         )
-        self.send_btn.clicked.connect(self._on_send)
+        self.send_btn.clicked.connect(self._send_clicked)
         input_row.addWidget(self.send_btn)
         lay.addLayout(input_row)
 
@@ -246,9 +288,98 @@ class FootChat(QWidget):
             self._reply_fade.setDuration(220)
             self._reply_fade.start()
 
+    def _think_tick(self):
+        """Animacion de puntos del indicador de escritura."""
+        self._think_dots = 1 + (self._think_dots % 3)
+        self.thinking.setText("Yue está escribiendo" + "." * self._think_dots)
+
+    def _spinner_tick(self):
+        """Animacion circular del boton mientras Yue esta contestando."""
+        self._spinner_i = (self._spinner_i + 1) % len(self._spinner_chars)
+        self.send_btn.setText(self._spinner_chars[self._spinner_i])
+
+    def _set_busy(self, busy: bool):
+        """Flecha ➤ mientras se puede enviar; spinner mientras Yue contesta."""
+        self._busy = busy
+        if busy:
+            self._spinner_i = 0
+            self.send_btn.setText(self._spinner_chars[0])
+            self.send_btn.setToolTip("Detener la respuesta de YUE")
+            self._spinner_timer.start()
+        else:
+            self._spinner_timer.stop()
+            self.send_btn.setText("➤")
+            self.send_btn.setToolTip("Enviar")
+
+    def _send_clicked(self):
+        if self._busy:
+            # En modo carga el boton es STOP: corta la respuesta y vuelve a ➤.
+            self.cancel_request.emit()
+            self._stop_thinking()
+        else:
+            self._on_send()
+
+    def _start_thinking(self):
+        self._think_dots = 1
+        self.thinking.setText("Yue está escribiendo.")
+        self.thinking.show()
+        self._think_timer.start()
+        self._think_timeout.start()
+        self._schedule_layout()
+        self._set_busy(True)
+
+    def _stop_thinking(self):
+        self._think_timer.stop()
+        self._think_timeout.stop()
+        if not self.thinking.isHidden():
+            self.thinking.hide()
+            self._schedule_layout()
+        self._set_busy(False)
+
+    def _bloqueo_spam(self, text) -> str:
+        """Devuelve el motivo si este envio saturaria a Yue; "" si pasa.
+
+        Dos salvaguardas contra el envio repetido y masivo:
+        1. Duplicado: el mismo texto ya enviado en los ultimos segundos.
+        2. Rafaga: demasiados envios seguidos sin tiempo para responder.
+        """
+        ahora = time.monotonic()
+        # Contar solo los envios dentro de la ventana de rafaga.
+        activos = sum(
+            1 for _, ts in self._historial_envios
+            if ahora - ts <= config.CHAT_BURST_WINDOW_S
+        )
+        if activos >= config.CHAT_BURST_MAX:
+            return "Vas muy rápido; deja que termine de responder antes de seguir."
+        # Duplicado de uno de los ultimos mensajes aceptados.
+        if any(
+            prev == text and ahora - ts <= config.CHAT_ANTIDUP_WINDOW_S
+            for prev, ts in self._historial_envios
+        ):
+            return "Eso ya me lo escribiste hace un momento; dame un instante."
+        return ""
+
+    def _avisar_rechazo(self, texto):
+        """Muestra un aviso breve del sistema (no una respuesta de Yue)."""
+        self._reply_fade.stop()
+        self._reply_timer.stop()
+        self.reply.setText(texto)
+        self._reply_opacity.setOpacity(1.0)
+        self.reply.show()
+        self._reply_timer.start(4500)
+        self._schedule_layout()
+
     def _on_send(self):
         text = self.input.text().strip()
         if not text:
+            self.ensure_input_ready(focus=True)
+            return
+        # Anti-saturacion: si esto ya se envio hace un momento o vamos muy
+        # rapido, NO se emite y se devuelve el texto a la caja con un aviso.
+        motivo = self._bloqueo_spam(text)
+        if motivo:
+            self._avisar_rechazo(motivo)
+            self.input.setText(text)
             self.ensure_input_ready(focus=True)
             return
         self._reply_timer.stop()
@@ -258,6 +389,9 @@ class FootChat(QWidget):
         self.input.clear()
         self._schedule_layout()
         self.send_message.emit(text)
+        self._historial_envios.append((text, time.monotonic()))
+        # Encender el indicador "Yue está escribiendo…" hasta que responda.
+        self._start_thinking()
         QTimer.singleShot(0, lambda: self.ensure_input_ready(focus=False))
 
     def set_bond(self, level):
@@ -274,6 +408,7 @@ class FootChat(QWidget):
 
     def show_reply(self, text):
         text = (text or "").strip()
+        self._stop_thinking()
         self._reply_fade.stop()
         self._reply_timer.stop()
         if not text:

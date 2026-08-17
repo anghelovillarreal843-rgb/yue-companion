@@ -203,7 +203,7 @@ def test_6_vision_no_toca_el_avatar_directamente():
     """
     import re
     raiz = Path(__file__).resolve().parents[1]
-    permitidos = {"core/state/renderer.py", "main.py",
+    permitidos = {"core/state/renderer.py", "main.py", "engine/emotion_orchestrator.py",
                   "vision/integration.py", "core/vision/integration.py"}
 
     patron = re.compile(r"^\s*[\w.]*pet\.set_emotion\(", re.MULTILINE)
@@ -444,10 +444,12 @@ def test_estado_global_es_inmutable():
 # ==========================================================================
 # EXTRA — la iniciativa se USA, no solo se calcula
 # ==========================================================================
-def _controller_falso(gestor):
-    """Instancia mínima para probar métodos de `Controller` sin arrancar Qt."""
+def _director_falso(gestor):
+    """Instancia mínima de MemoryProactive con un ctx falso (sin Qt)."""
     import types
-    return types.SimpleNamespace(state_manager=gestor)
+    from engine.memory_proactive import MemoryProactive
+    ctx = types.SimpleNamespace(state_manager=gestor)
+    return MemoryProactive(ctx)
 
 
 def test_iniciativa_none_bloquea_hablar_primero():
@@ -458,9 +460,9 @@ def test_iniciativa_none_bloquea_hablar_primero():
         emotion="relaxed", behavior="waiting", voice_style="quiet",
         initiative="none", source="conversation",
         priority=Priority.USER, ttl=30.0))
-    app = _controller_falso(gestor)
-    assert main.Controller._yue_may_take_initiative(app, "medium") is False
-    assert main.Controller._yue_may_take_initiative(app, "low") is False
+    director = _director_falso(gestor)
+    assert director.yue_may_take_initiative("medium") is False
+    assert director.yue_may_take_initiative("low") is False
 
 
 def test_iniciativa_alta_permite_hablar_primero():
@@ -469,32 +471,32 @@ def test_iniciativa_alta_permite_hablar_primero():
     gestor.propose(YueProposal(
         emotion="playful", behavior="entertaining", initiative="high",
         source="conversation", priority=Priority.USER, ttl=30.0))
-    app = _controller_falso(gestor)
-    assert main.Controller._yue_may_take_initiative(app, "medium") is True
+    director = _director_falso(gestor)
+    assert director.yue_may_take_initiative("medium") is True
 
 
 def test_sin_gestor_la_iniciativa_no_bloquea_nada():
     """Degradación: sin cerebro central, YUE se comporta como siempre."""
-    import main
-    import types
-    app = types.SimpleNamespace(state_manager=None)
-    assert main.Controller._yue_may_take_initiative(app, "high") is True
+    _ = None  # main no se importa: la degradación vive en el director
+    director = _director_falso(None)
+    assert director.yue_may_take_initiative("high") is True
 
 
 def test_sync_system_state_refleja_la_realidad():
     """Los campos del SYSTEM STATE dejan de ser decorativos."""
-    import main
     import types
+    from engine.emotion_orchestrator import EmotionOrchestrator
     gestor = _sm()
-    app = types.SimpleNamespace(
+    ctx = types.SimpleNamespace(
         state_manager=gestor,
         listener=types.SimpleNamespace(enabled=True),
         camera=types.SimpleNamespace(active=True),
         speaker=types.SimpleNamespace(is_speaking=False),
         audio=types.SimpleNamespace(media_playing=True),
         teacher=types.SimpleNamespace(is_active=True),
-        _pc_busy=False, _vision_busy=False, _autonomy_busy=False)
-    main.Controller._sync_system_state(app)
+        pc_busy=False, vision_busy=False, autonomy_busy=False)
+    app = types.SimpleNamespace(ctx=ctx, controller_ctx=ctx)
+    EmotionOrchestrator.sync_system_state(app)
 
     sistema = gestor.system_state()
     assert sistema.mic == "listening"
@@ -506,16 +508,17 @@ def test_sync_system_state_refleja_la_realidad():
 
 
 def test_sync_system_state_prioriza_el_control_de_pc():
-    import main
     import types
+    from engine.emotion_orchestrator import EmotionOrchestrator
     gestor = _sm()
-    app = types.SimpleNamespace(
+    ctx = types.SimpleNamespace(
         state_manager=gestor,
         listener=types.SimpleNamespace(enabled=False),
         speaker=types.SimpleNamespace(is_speaking=True),
         teacher=types.SimpleNamespace(is_active=True),
-        _pc_busy=True, _vision_busy=False, _autonomy_busy=False)
-    main.Controller._sync_system_state(app)
+        pc_busy=True, vision_busy=False, autonomy_busy=False)
+    app = types.SimpleNamespace(ctx=ctx, controller_ctx=ctx)
+    EmotionOrchestrator.sync_system_state(app)
     # Controlar el PC es lo más urgente: manda sobre la clase.
     assert gestor.system_state().activity == "controlling"
     assert gestor.system_state().voice == "speaking"

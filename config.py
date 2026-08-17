@@ -344,6 +344,19 @@ CAMERA_CONTEXT_MAX_AGE = _env_float("CAMERA_CONTEXT_MAX_AGE", "8")
 # Salvaguarda: si la voz está apagada, el texto se muestra igual para que no se
 # quede muda. Los avisos de estado (p. ej. "Voz desactivada") siempre se ven.
 CHAT_MOSTRAR_RESPUESTAS = _truthy(os.getenv("CHAT_MOSTRAR_RESPUESTAS", "false"))
+
+# ---- Anti-saturacion del chat escrito ------------------------------
+# Yue rechaza (sin llegar a la IA) el texto repetido y los envios en rafaga.
+#   CHAT_ANTIDUP_WINDOW_S: si reenvias el MISMO texto dentro de esta ventana
+#     (segundos), el envio se rechaza con un aviso y no llega a la IA.
+#   CHAT_ANTIDUP_MEM: cuantos de los ultimos envios se comparan por duplicado.
+#   CHAT_BURST_WINDOW_S / CHAT_BURST_MAX: si envias CHAT_BURST_MAX mensajes
+#     (distintos) dentro de esta ventana, el siguiente se rechaza hasta que
+#     pasen los mas viejos. Evita que Yue se atragante con una rafaga.
+CHAT_ANTIDUP_WINDOW_S = _env_float("CHAT_ANTIDUP_WINDOW_S", "20")
+CHAT_ANTIDUP_MEM = _env_int("CHAT_ANTIDUP_MEM", "3")
+CHAT_BURST_WINDOW_S = _env_float("CHAT_BURST_WINDOW_S", "12")
+CHAT_BURST_MAX = _env_int("CHAT_BURST_MAX", "4")
 CAMERA_DOWNLOAD_MODELS = _truthy(os.getenv("CAMERA_DOWNLOAD_MODELS", "true"))
 CAMERA_FACE_MODEL_URL = os.getenv(
     "CAMERA_FACE_MODEL_URL",

@@ -1,9 +1,11 @@
-"""Texto que aparece a los pies de Yue cuando el usuario escribe:
-sube lentamente, pierde opacidad y desaparece."""
+"""Texto que aparece cuando el usuario escribe: sube lentamente y desaparece.
+Estilizado con la paleta sobria de YUE (sin transparencias ni neones)."""
 from PyQt5.QtCore import (Qt, QPoint, QRectF, QPropertyAnimation,
                           QParallelAnimationGroup, QEasingCurve)
 from PyQt5.QtGui import QColor, QPainter
-from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication
+
+from ui import theme
 
 
 class FloatingText(QWidget):
@@ -26,26 +28,37 @@ class FloatingText(QWidget):
         self.label = QLabel(text)
         self.label.setWordWrap(True)
         self.label.setStyleSheet(
-            "color:#ffffff; font-size:13px; font-weight:600; background:transparent;"
+            f"color:{theme.TEXT}; font-size:13px; font-weight:600; background:transparent;"
         )
         self.label.setMaximumWidth(250)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setContentsMargins(14, 9, 14, 9)
         lay.addWidget(self.label)
         self.adjustSize()
 
-        # nace justo por encima del punto ancla (a los pies, lado izquierdo)
-        self.move(anchor_global.x(), anchor_global.y() - self.height())
+        # Nace justo por encima del punto ancla, pero SIEMPRE dentro de la
+        # pantalla visible: antes podia quedar cortado (por arriba o por los
+        # lados) cuando el chat estaba pegado al borde del escritorio.
+        screen = self.screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        geom = screen.availableGeometry() if screen else QRectF(0, 0, 1920, 1080)
+        x = anchor_global.x()
+        y = anchor_global.y() - self.height()
+        x = max(geom.left() + 4, min(x, geom.right() - self.width() - 4))
+        y = max(geom.top() + 4, min(y, geom.bottom() - self.height() - 4))
+        self.move(QPoint(int(x), int(y)))
         self._build_animation()
 
     def paintEvent(self, _):
-        # fondo oscuro translúcido para que el texto sea legible sobre cualquier fondo
+        # Fondo solido morado oscuro con borde suave: legible sobre cualquier
+        # fondo, sin translucidez ni desenfoque.
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(28, 22, 34, 200))
-        p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 14, 14)
+        p.setPen(QColor(theme.LINE))
+        p.setBrush(QColor(theme.GLASS))
+        p.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 14, 14)
 
     def _build_animation(self):
         dur = max(3500, min(9000, 2200 + len(self.label.text()) * 55))
@@ -72,4 +85,7 @@ class FloatingText(QWidget):
     def start(self):
         self.setWindowOpacity(1.0)
         self.show()
+        # Asegura que la nota quede POR ENCIMA del chat y el avatar, no
+        # "trasera" (antes podia aparecer tapada por otras ventanas de YUE).
+        self.raise_()
         self._group.start()

@@ -1,34 +1,36 @@
-"""Tema visual de YUE: paleta holografica y estilos reutilizables.
+"""Tema visual de YUE: paleta morada sobria, sin neones ni transparencias.
 
-Una estetica futurista y elegante (cristal oscuro + neon cian/violeta) que
-comparten el chat y los globos de dialogo.
+Morado oscuro profundo sobre superficies solidas (nada de cristal translucido,
+nada de blur) con un lila lavanda suave como unico acento. Diseñado para
+descansar la vista en conversaciones largas y lejos del tipico aspecto
+"chatbot de IA" (cian/magenta neon sobre vidrio difuminado).
 """
 
-# --- Paleta ---
-BG0 = "#08060f"      # fondo mas oscuro
-BG1 = "#0d0a1c"      # panel
-BG2 = "#161033"      # panel claro
-GLASS = "rgba(18, 14, 38, 215)"
-CYAN = "#7df9ff"
-VIOLET = "#b388ff"
-MAGENTA = "#e0567a"
-TEXT = "#ece7f5"
-TEXT_DIM = "#9b8fc0"
-LINE = "rgba(150, 120, 230, 120)"
+# --- Paleta (todo solido, sin alfa) ---
+BG0 = "#14111d"      # fondo mas oscuro
+BG1 = "#1b1727"      # panel
+BG2 = "#242032"      # panel claro
+GLASS = "#1e1a2c"    # superficie del chat (opaca)
+ACCENT = "#b9a3e8"   # lila lavanda suave, unico color de acento
+ACCENT2 = "#8f7fc0"  # morado medio (matices secundarios)
+MAGENTA = "#c05a72"  # rosa terroso (hover de botones de cierre)
+TEXT = "#efeaf9"
+TEXT_DIM = "#a89bc4"
+LINE = "#332c4d"     # bordes suaves, nunca luminosos
 
 FONT_UI = "Segoe UI"
 FONT_MONO = "Consolas"
 
-# Degradado de acento (cian -> violeta) para botones/titulos
+# Degradado de acento (morado medio -> lila) para botones/titulos
 ACCENT_GRAD = (f"qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-               f"stop:0 {VIOLET}, stop:1 {CYAN})")
+               f"stop:0 {ACCENT2}, stop:1 {ACCENT})")
 
 
 def card_qss(name="card"):
     return f"""
         QFrame#{name}{{
             background: qlineargradient(x1:0,y1:0,x2:0.5,y2:1,
-                        stop:0 #100b22, stop:1 #0a0717);
+                        stop:0 #242032, stop:1 #1b1727);
             border: 1px solid {LINE};
             border-radius: 20px;
         }}
@@ -38,32 +40,32 @@ def card_qss(name="card"):
 def primary_button_qss():
     return f"""
         QPushButton{{
-            color:#06121a; border:none; border-radius:13px; font-weight:bold;
+            color:#1c1630; border:none; border-radius:13px; font-weight:bold;
             padding:8px 14px;
             background:{ACCENT_GRAD};
         }}
         QPushButton:hover{{
             background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                       stop:0 #c6a4ff, stop:1 #9ffbff);
+                       stop:0 #a08ed0, stop:1 #c7b4f0);
         }}
-        QPushButton:pressed{{ background:{CYAN}; }}
-        QPushButton:disabled{{ background:#3a3357; color:#8a82aa; }}
+        QPushButton:pressed{{ background:{ACCENT}; }}
+        QPushButton:disabled{{ background:#2a2440; color:#7d74a0; }}
     """
 
 
 def ghost_button_qss():
     return f"""
         QPushButton{{
-            color:{CYAN}; background:rgba(125,249,255,16);
-            border:1px solid rgba(125,249,255,90); border-radius:11px;
+            color:{ACCENT}; background:rgba(185,163,232,16);
+            border:1px solid rgba(185,163,232,80); border-radius:11px;
             padding:6px 12px; font-weight:600;
         }}
-        QPushButton:hover{{ background:rgba(125,249,255,38); color:#eafdff; }}
-        QPushButton:pressed{{ background:rgba(125,249,255,60); }}
+        QPushButton:hover{{ background:rgba(185,163,232,32); color:#f2edff; }}
+        QPushButton:pressed{{ background:rgba(185,163,232,50); }}
     """
 
 
 def close_button_qss():
-    return (f"QPushButton{{color:{VIOLET};background:rgba(180,140,255,28);border:none;"
+    return (f"QPushButton{{color:{ACCENT2};background:rgba(143,127,192,22);border:none;"
             f"border-radius:15px;font-weight:bold;font-size:14px;}}"
             f"QPushButton:hover{{background:{MAGENTA};color:white;}}")

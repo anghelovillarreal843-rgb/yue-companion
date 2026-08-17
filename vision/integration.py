@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 
+from contracts.vision_host import VisionHost
 from vision import settings as settings_mod
 
 log = logging.getLogger("vision.integration")
@@ -102,11 +103,7 @@ def _make_guards(app):
         try:
             gestor = getattr(app, "state_manager", None)
             if gestor is not None:
-                try:
-                    from core.state import Priority
-                    return bool(gestor.would_win(int(Priority.EMOTION), "vision"))
-                except Exception:
-                    pass
+                return bool(gestor.would_win(int(VisionHost.EMOTION_PRIORITY), "vision"))
             audio = getattr(app, "audio", None)
             if audio is not None and bool(getattr(audio, "media_playing", False)):
                 return False   # la cara la gobierna el acompañamiento musical
@@ -122,8 +119,15 @@ def _make_guards(app):
     return can_speak, can_animate
 
 
-def attach(app):
-    """Engancha el sistema de visión MP a la app real. None si está apagado."""
+def attach(host: VisionHost):
+    """Engancha el sistema de visión MP a la app real. None si está apagado.
+
+    `host` debe cumplir `VisionHost` (contrato en contracts/). La composición
+    (main.py) lo inyecta; el adaptador formal llega en PR 4. Duck-typing
+    preservado: si el host no implementa algo, la visión se vuelve prudente,
+    nunca se rompe.
+    """
+    app = host
     cfg = settings_mod.load()
     if not cfg.enabled:
         log.info("Visión MP desactivada; no se engancha.")
@@ -145,11 +149,7 @@ def attach(app):
         try:
             gestor = getattr(app, "state_manager", None)
             if gestor is not None:
-                try:
-                    from core.state import Priority
-                    prioridad = int(Priority.EMOTION)
-                except Exception:
-                    prioridad = 60
+                prioridad = int(VisionHost.EMOTION_PRIORITY)
                 gestor.request_emotion(str(name), float(intensity), int(ms),
                                        priority=prioridad, source="vision")
                 return

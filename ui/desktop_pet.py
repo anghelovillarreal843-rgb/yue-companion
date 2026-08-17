@@ -13,6 +13,7 @@ from PyQt5.QtGui import QPixmap, QColor, QCursor
 from PyQt5.QtWidgets import QWidget, QLabel, QMenu, QApplication
 
 import config
+from ui import theme
 
 # ¿Tenemos motor web para el VRM 3D?
 try:
@@ -364,9 +365,25 @@ class DesktopPet(QWidget):
 
     def _context_menu(self, pos):
         m = QMenu()
+        # Rediseno sobrio con la paleta de YUE: superficie solida morada,
+        # sin transparencias, sin blur ni neones. Misma familia que el chat.
         m.setStyleSheet(
-            "QMenu{background:#251f30;color:#f3e9fb;border:1px solid #3a3247;}"
-            "QMenu::item:selected{background:#5a4a72;}"
+            "QMenu{"
+            f"background:{theme.GLASS};color:{theme.TEXT};"
+            f"border:1px solid {theme.LINE};border-radius:12px;"
+            "padding:6px 4px;"
+            "}"
+            "QMenu::item{"
+            f"color:{theme.TEXT};background:transparent;border-radius:8px;"
+            "padding:8px 18px 8px 12px;margin:1px 6px;"
+            "}"
+            "QMenu::item:selected{"
+            f"background:{theme.BG2};color:{theme.ACCENT};"
+            "}"
+            "QMenu::item:disabled{color:" + theme.TEXT_DIM + ";}"
+            "QMenu::separator{"
+            f"height:1px;background:{theme.LINE};margin:5px 10px;"
+            "}"
         )
         m.addAction("💬  Mostrar / ocultar chat", self.clicked.emit)
         m.addAction("🔊  Activar / silenciar voz", self.toggle_voice.emit)

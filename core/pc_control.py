@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import config
-from core import desktop_ui, screen_diff, screen_text, youtube, activity
+from core import screen_diff, screen_text, youtube, activity
 from core.app_catalog import AppCatalog
 from core.office_control import OfficeController, OfficeError, OfficeUnavailable
+from platforms import get_platform_controller
 from core.agent import (
     AgentLogger,
     AgentRuntimeError,
@@ -331,7 +332,8 @@ def looks_like_pc_command(text: str) -> bool:
 
 
 class PCController:
-    def __init__(self):
+    def __init__(self, platform_controller=None):
+        self.platform = platform_controller if platform_controller is not None else get_platform_controller()
         self.max_actions = max(1, config.PC_MAX_ACTIONS)
         self.max_cycles = max(1, getattr(config, "PC_MAX_CYCLES", 3))
         self.max_actions_per_cycle = max(1, getattr(config, "PC_MAX_ACTIONS_PER_CYCLE", 8))
@@ -370,7 +372,7 @@ class PCController:
         self.agent_registry = build_default_registry()
         self.agent_locks = LocksManager()
         self.agent_waiter = SmartWaiter(self._check_cancelled)
-        self.window_manager = WindowManager(desktop_ui, self.agent_waiter)
+        self.window_manager = WindowManager(self.platform, self.agent_waiter)
         self.focus_manager = FocusManager(self.window_manager)
         self.application_manager = ApplicationManager(
             self.window_manager, _APP_ALIASES, _APP_WINDOW_HINTS, self.focus_manager
@@ -394,8 +396,8 @@ class PCController:
             waiter=self.agent_waiter,
             screen_signature=self._agent_screen_signature,
             screen_changed=screen_diff.changed,
-            focused_element=desktop_ui.element_has_focus,
-            element_present=lambda name: desktop_ui.find_element_center(name),
+            focused_element=self.platform.element_has_focus,
+            element_present=lambda name: self.platform.find_element_center(name),
         )
         self.agent_recovery = RecoveryEngine()
         self.agent_runtime = AutonomousAgentRuntime(
@@ -573,13 +575,13 @@ class PCController:
         """
         atravesables = False
         try:
-            atravesables = bool(desktop_ui.set_click_through(True))
+            atravesables = bool(self.platform.set_click_through(True))
             if atravesables:
                 print("[control-pc] mis ventanas no estorban al mouse durante la orden")
             return fn()
         finally:
             if atravesables:
-                desktop_ui.set_click_through(False)
+                self.platform.set_click_through(False)
 
     # ------------------------------------------------------------------
     # Recuperación para usuarios que no pueden corregir rápido con el mouse
@@ -689,21 +691,21 @@ class PCController:
             elif action == "move_window":
                 guard = locks.acquire(("active_window", "mouse"), timeout=5.0) if locks else nullcontext()
                 with guard:
-                    desktop_ui.restore_window_snapshot(snapshot.get("window") or {})
+                    self.platform.restore_window_snapshot(snapshot.get("window") or {})
             elif action == "close_window":
                 guard = locks.acquire(("active_window",), timeout=5.0) if locks else nullcontext()
                 with guard:
-                    desktop_ui.reopen_window_snapshot(snapshot.get("window") or {})
+                    self.platform.reopen_window_snapshot(snapshot.get("window") or {})
             elif action == "drag":
                 # Solo invertimos el arrastre si seguimos en la misma ventana y no
                 # se abrió/cerró ninguna otra: evita soltar algo en otro contexto.
                 active_before = str(snapshot.get("active_window", ""))
-                active_now = desktop_ui.active_window_title()
-                if active_before and active_now and desktop_ui.similarity(active_before, active_now) < 0.72:
+                active_now = self.platform.active_window_title()
+                if active_before and active_now and self.platform.similarity(active_before, active_now) < 0.72:
                     return {"ok": False, "undone": False,
                             "reason": "la ventana activa cambió; no invertiré el arrastre a ciegas"}
                 before_titles = self._window_titles(snapshot.get("windows"))
-                now_titles = self._window_titles(desktop_ui.windows_snapshot())
+                now_titles = self._window_titles(self.platform.windows_snapshot())
                 if before_titles and now_titles and before_titles != now_titles:
                     return {"ok": False, "undone": False,
                             "reason": "cambió la lista de ventanas; no es seguro invertir el arrastre"}
@@ -1077,7 +1079,7 @@ class PCController:
     def _active_window_rect(self):
         """Rectángulo de la ventana con el foco, o None."""
         try:
-            for w in desktop_ui.list_windows(limit=25):
+            for w in self.platform.list_windows(limit=25):
                 if w.get("active") and w.get("rect"):
                     return [int(v) for v in w["rect"]]
         except Exception:
@@ -1092,7 +1094,7 @@ class PCController:
         """
         try:
             limite = int(getattr(config, "PC_UI_MAX_WINDOWS", 18))
-            ventanas = desktop_ui.list_windows(limit=limite)
+            ventanas = self.platform.list_windows(limit=limite)
             propias = {tuple(r) for r in self._ignore_rects()}
             return [
                 {"title": w.get("title", ""), "active": bool(w.get("active"))}
@@ -1107,7 +1109,7 @@ class PCController:
         """Hasta PC_UI_MAX_ELEMENTS controles visibles de la ventana activa."""
         try:
             limite = int(getattr(config, "PC_UI_MAX_ELEMENTS", 40))
-            elementos = desktop_ui.active_window_elements(limit=limite)
+            elementos = self.platform.active_window_elements(limit=limite)
             return [
                 {"name": e.get("name", ""), "type": e.get("control_type", "")}
                 for e in elementos
@@ -1736,15 +1738,15 @@ class PCController:
         action = str(step.get("action", ""))
         try:
             if action in {"move_window", "close_window"}:
-                snap = desktop_ui.window_snapshot(str(step.get("title", "")))
+                snap = self.platform.window_snapshot(str(step.get("title", "")))
                 if snap:
                     return {"kind": action, "window": snap,
-                            "windows": desktop_ui.windows_snapshot()}
+                            "windows": self.platform.windows_snapshot()}
             if action == "drag":
                 return {
                     "kind": "drag",
-                    "active_window": desktop_ui.active_window_title(),
-                    "windows": desktop_ui.windows_snapshot(),
+                    "active_window": self.platform.active_window_title(),
+                    "windows": self.platform.windows_snapshot(),
                     "from_x_pct": float(step.get("from_x_pct", 0.5)),
                     "from_y_pct": float(step.get("from_y_pct", 0.5)),
                     "to_x_pct": float(step.get("to_x_pct", 0.5)),
@@ -1763,11 +1765,11 @@ class PCController:
         """Clica el centro REAL del control cuyo nombre coincida (difuso)."""
         nombre = str(step.get("name", ""))
         tipo = str(step.get("control_type", "")) or None
-        if not desktop_ui.available():
+        if not self.platform.is_available():
             raise PCControlError(
                 "click_element necesita pywinauto en Windows (pip install pywinauto)."
             )
-        encontrado = desktop_ui.find_element_center(nombre, tipo)
+        encontrado = self.platform.find_element_center(nombre, tipo)
         if not encontrado:
             # El modelo pide «7» pero el control real se llama «Siete»; o acierta
             # el nombre y falla el control_type. Antes de rendirnos (y quemar un
@@ -1779,7 +1781,7 @@ class PCController:
             ):
                 if not otro_nombre or (otro_nombre == nombre and otro_tipo == tipo):
                     continue
-                encontrado = desktop_ui.find_element_center(otro_nombre, otro_tipo)
+                encontrado = self.platform.find_element_center(otro_nombre, otro_tipo)
                 if encontrado:
                     break
         if not encontrado:
@@ -1805,26 +1807,26 @@ class PCController:
 
     def _act_focus_window(self, step: dict) -> str:
         try:
-            real = desktop_ui.focus_window(str(step.get("title", "")))
-            if desktop_ui.available():
+            real = self.platform.focus_window(str(step.get("title", "")))
+            if self.platform.is_available():
                 self.window_manager.wait_focused(real, timeout=5.0)
         except Exception as exc:
             raise PCControlError(str(exc)) from exc
         return f"foco en «{real}»"
 
     def _act_list_windows(self, step: dict) -> str:
-        ventanas = desktop_ui.list_windows(limit=int(getattr(config, "PC_UI_MAX_WINDOWS", 18)))
+        ventanas = self.platform.list_windows(limit=int(getattr(config, "PC_UI_MAX_WINDOWS", 18)))
         if not ventanas:
             raise PCControlError("No pude leer las ventanas abiertas.")
-        return "ventanas: " + desktop_ui.describe_windows(ventanas)
+        return "ventanas: " + self.platform.describe_windows(ventanas)
 
     def _act_close_window(self, step: dict) -> str:
         titulo = str(step.get("title", ""))
         # Doble muro: la lista de términos bloqueados también aplica al título.
         self._check_instruction(titulo)
         try:
-            real = desktop_ui.close_window(titulo)
-            if desktop_ui.available():
+            real = self.platform.close_window(titulo)
+            if self.platform.is_available():
                 self.window_manager.wait_absent(real, timeout=8.0)
         except Exception as exc:
             raise PCControlError(str(exc)) from exc
@@ -1832,7 +1834,7 @@ class PCController:
 
     def _act_move_window(self, step: dict) -> str:
         try:
-            real = desktop_ui.move_window(
+            real = self.platform.move_window(
                 str(step.get("title", "")), int(step.get("x", 0)), int(step.get("y", 0)),
                 step.get("width"), step.get("height"),
             )
@@ -1889,7 +1891,7 @@ class PCController:
         # Ctrl+S es seguro; si hay path se usa Guardar como de forma simulada solo
         # como último recurso. El permiso de sobrescritura sigue validándose aparte.
         if step.get("path"):
-            before_title = desktop_ui.active_window_title()
+            before_title = self.platform.active_window_title()
             self._pyautogui_action({"action": "hotkey", "keys": ["ctrl", "shift", "s"]})
             self._wait_for_save_dialog(before_title)
             self._pyautogui_action({"action": "type_text", "text": str(step["path"])})
@@ -1911,7 +1913,7 @@ class PCController:
     def _office_keyboard_fallback(self, app: str, text: str, create_only: bool) -> str:
         self._open_app(app)  # ApplicationManager espera una ventana real y reutiliza instancias.
         try:
-            desktop_ui.focus_window(app)
+            self.platform.focus_window(app)
             self.window_manager.wait_focused(app, timeout=5.0)
         except Exception:
             # En entornos sin UI Automation, el launcher ya realizó la mejor
@@ -1925,13 +1927,13 @@ class PCController:
 
     def _wait_for_office_ready(self, app: str, timeout: float = 8.0) -> None:
         """Espera por foco/controles observables, nunca por un número fijo de segundos."""
-        if not desktop_ui.available():
+        if not self.platform.is_available():
             return
         hints = _APP_WINDOW_HINTS.get(_APP_ALIASES.get(_norm(app), _norm(app)), (app,))
         self.agent_waiter.until(
             lambda: self.window_manager.find(hints) and (
                 self.window_manager.active_title()
-                or desktop_ui.active_window_elements(limit=12)
+                or self.platform.active_window_elements(limit=12)
             ),
             timeout=timeout,
             description=f"Office listo ({app})",
@@ -1939,16 +1941,16 @@ class PCController:
 
     def _wait_for_save_dialog(self, previous_title: str, timeout: float = 8.0) -> None:
         """Detecta el diálogo Guardar como mediante título o controles accesibles."""
-        if not desktop_ui.available():
+        if not self.platform.is_available():
             return
 
         def dialog_ready():
-            title = desktop_ui.active_window_title()
+            title = self.platform.active_window_title()
             if title and title != previous_title:
                 normalized = _norm(title)
                 if any(token in normalized for token in ("guardar", "save", "archivo", "file")):
                     return title
-            for element in desktop_ui.active_window_elements(limit=35) or []:
+            for element in self.platform.active_window_elements(limit=35) or []:
                 name = _norm(str(element.get("name", "")))
                 if any(token in name for token in ("nombre de archivo", "file name", "guardar", "save")):
                     return element
@@ -2010,7 +2012,7 @@ class PCController:
     def _ignore_rects(self) -> list[list[int]]:
         """Zonas a excluir de la comparación: las ventanas de la propia Yue."""
         try:
-            return desktop_ui.own_window_rects()
+            return self.platform.own_window_rects()
         except Exception:
             return []
 
@@ -2067,7 +2069,7 @@ class PCController:
         if not step or step.get("action") != "click_element":
             return False
         try:
-            return desktop_ui.element_has_focus(str(step.get("name", "")))
+            return self.platform.element_has_focus(str(step.get("name", "")))
         except Exception:
             return False
 
@@ -2182,7 +2184,7 @@ class PCController:
         """Reutiliza una instancia existente o abre una sola y espera su ventana."""
         requested = _norm(requested)
         manager = getattr(self, "application_manager", None)
-        if manager is None or not desktop_ui.available():
+        if manager is None or not self.platform.is_available():
             return self._launch_app_process(requested)
         title, reused, detail = manager.ensure_open(
             requested,
@@ -2214,7 +2216,7 @@ class PCController:
                 return "ruta local"
             try:
                 import pyautogui
-                before = desktop_ui.active_window_title()
+                before = self.platform.active_window_title()
                 if system == "darwin":
                     pyautogui.hotkey("command", "space")
                 else:
@@ -2222,8 +2224,8 @@ class PCController:
                 waiter = getattr(self, "agent_waiter", SmartWaiter(self._check_cancelled))
                 try:
                     waiter.until(
-                        lambda: desktop_ui.active_window_title() != before
-                        or any(str(e.get("name", "")).strip() for e in desktop_ui.active_window_elements(limit=10)),
+                        lambda: self.platform.active_window_title() != before
+                        or any(str(e.get("name", "")).strip() for e in self.platform.active_window_elements(limit=10)),
                         timeout=2.5,
                         description="el buscador de aplicaciones",
                     )
@@ -2243,7 +2245,7 @@ class PCController:
     def _focus_existing_app(alias: str, requested: str) -> str:
         hints = _APP_WINDOW_HINTS.get(alias, (requested, alias))
         try:
-            windows = desktop_ui.list_windows(limit=40)
+            windows = self.platform.list_windows(limit=40)
         except Exception:
             return ""
         best_title, best_score = "", 0.0
@@ -2251,12 +2253,12 @@ class PCController:
             title = str(win.get("title", ""))
             if not title:
                 continue
-            score = max(desktop_ui.similarity(hint, title) for hint in hints if hint)
+            score = max(self.platform.similarity(hint, title) for hint in hints if hint)
             if score > best_score:
                 best_title, best_score = title, score
         if best_title and best_score >= 0.72:
             try:
-                return desktop_ui.focus_window(best_title)
+                return self.platform.focus_window(best_title)
             except Exception:
                 return ""
         return ""

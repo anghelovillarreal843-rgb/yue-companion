@@ -2,7 +2,9 @@
 mientras este se mueve, sube lentamente, pierde opacidad y desaparece."""
 from PyQt5.QtCore import Qt, QPoint, QRectF, QTimer, QElapsedTimer
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QFont
-from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication
+
+from ui import theme
 
 
 def _ease_out_cubic(t):
@@ -26,8 +28,8 @@ class SpeechBubble(QWidget):
 
         self.label = QLabel(text)
         self.label.setWordWrap(True)
-        self.label.setFont(QFont("Segoe UI", 11))
-        self.label.setStyleSheet("color: #eafcff; background:transparent;")
+        self.label.setFont(QFont(theme.FONT_UI, 11))
+        self.label.setStyleSheet(f"color: {theme.TEXT}; background:transparent;")
         self.label.setMaximumWidth(240)
 
         lay = QVBoxLayout(self)
@@ -59,13 +61,22 @@ class SpeechBubble(QWidget):
         tail.lineTo(46, h - 12)
         path = path.united(tail)
 
-        p.setPen(QColor(125, 249, 255, 200))
-        p.setBrush(QColor(14, 11, 30, 235))
+        p.setPen(QColor(theme.ACCENT))
+        p.setBrush(QColor(theme.GLASS))
         p.drawPath(path)
 
     def _reposition(self, rise):
         a = self._anchor()  # posicion ACTUAL de Yue (la sigue al moverse/balancearse)
-        self.move(a.x(), int(a.y() - self.height() - rise))
+        screen = self.screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        geom = screen.availableGeometry() if screen else QRectF(0, 0, 1920, 1080)
+        # Mantiene el globo DENTRO de la pantalla: arriba no se corta (sale
+        # justo sobre la cabeza de Yue) y abajo no se superpone al avatar.
+        x = max(geom.left() + 4, min(a.x(), geom.right() - self.width() - 4))
+        y = max(geom.top() + 4, min(int(a.y() - self.height() - rise),
+                                    geom.bottom() - self.height() - 40))
+        self.move(int(x), int(y))
 
     def _tick(self):
         t = min(1.0, self._clock.elapsed() / self._duration)
@@ -86,5 +97,7 @@ class SpeechBubble(QWidget):
         self.setWindowOpacity(1.0)
         self._reposition(0.0)
         self.show()
+        # Que el globo quede por encima del avatar y el chat, nunca "trasero".
+        self.raise_()
         self._clock.start()
         self._timer.start(30)

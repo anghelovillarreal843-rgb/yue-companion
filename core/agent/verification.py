@@ -291,8 +291,8 @@ class VerificationEngine:
 
     def _desktop_available(self) -> bool:
         try:
-            available = getattr(self.windows.desktop, "available", None)
-            return bool(available()) if callable(available) else True
+            check = getattr(self.windows.desktop, "is_available", None) or getattr(self.windows.desktop, "available", None)
+            return bool(check()) if callable(check) else True
         except Exception:
             return False
 
