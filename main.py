@@ -158,6 +158,7 @@ class Controller(QObject):
 
     def __init__(self):
         super().__init__()
+        # ---------- FASE 1 · HOST PURO (sin ctx): memorias, motores, UI, bridges ----------
         self.memory = Memory(config.DB_PATH)
         # NUEVO (bitácora): los módulos de acción registran en la bitácora vía el
         # sumidero desacoplado; aquí lo conectamos a memory.add_activity.
@@ -279,7 +280,6 @@ class Controller(QObject):
         self.listener = VoiceListener()
         self.pc = PCController()
         self.autonomy = Autonomy()
-        self.controller_ctx = ControllerContext()  # PR 5.1: workers viven en ctx
         self._camera_bridge = CameraBridge()
         # El CameraObserver y el head_control los crea/engancha setup_camera
         # (PR 5.7): el observador vive en el VisionDirector y publica su
@@ -321,8 +321,6 @@ class Controller(QObject):
         except Exception as exc:
             print("[estado] no pude enganchar el renderer del avatar:", exc)
 
-        self.vision_director = VisionDirector(self.controller_ctx)
-        self.setup_camera()
         self._floaters = []
         # El módulo de lecciones necesita el LLM para reflexionar sobre los fallos.
         try:
@@ -332,7 +330,6 @@ class Controller(QObject):
             print("[aprendizaje] paquete no disponible:", exc)
         self._vision_on = bool(config.VISION_ENABLED)
         self._autonomy_started_at = 0.0
-        self.controller_ctx.chat_request_id = 0
 
         # Coordinador aditivo audio + pantalla + emoción + avatar + memoria.
         # Sus callbacks siempre pasan por señales Qt antes de tocar la interfaz.
@@ -345,9 +342,6 @@ class Controller(QObject):
             status_callback=self._media_companion_bridge.status.emit,
             context_callback=self._media_companion_context,
         )
-
-        # La visión de pantalla está disponible desde el inicio, pero no hace
-        # comentarios periódicos. Solo se usa para órdenes o peticiones explícitas.
 
         # NUEVO (latido del cerebro): `state_manager.tick()` estaba definido
         # pero NADIE lo llamaba, así que los TTL solo caducaban de rebote cuando
@@ -373,18 +367,17 @@ class Controller(QObject):
         # «Yue» (voz o texto). Configurable desde el .env. No afecta a la escucha de
         # música/vídeo del sistema, que es un subsistema aparte.
         self._wake_word_enabled = bool(getattr(config, "WAKE_WORD_ENABLED", True))
+        # ---------- FASE 2 · CONTROLLER CTX + CANALES DEL HOST ----------
         # PR 5.2: el estado de entrada (voz/texto) y el wake-re viven en el
         # VoiceDirector/ctx; aquí solo se publican los componentes del host.
+        self.controller_ctx = ControllerContext()  # PR 5.1: workers viven en ctx
+        self.controller_ctx.chat_request_id = 0
         self.controller_ctx.input_source = "texto"
         self.controller_ctx.speaker = self.speaker
         self.controller_ctx.listener = self.listener
         self.controller_ctx.chat = self.chat
         self.controller_ctx.pet = self.pet
         self.controller_ctx.state_manager = self.state_manager
-        # PR 5 paso 10: DialogueDirector (dueño del dialogo y canales de voz/status)
-        self.dialogue_director = DialogueDirector(self.controller_ctx)
-        self.controller_ctx.user_message = self.dialogue_director.on_user_message
-        # PR 5.4: PCDirector (~16 métodos del paquete PC) vive en engine/.
         self.controller_ctx.pc = self.pc
         self.controller_ctx.engine = self.engine
         self.controller_ctx.brain = self.brain
@@ -395,8 +388,6 @@ class Controller(QObject):
         self.controller_ctx.confirm_notify = self.confirm_notify.emit
         self.controller_ctx.user_float = self._user_float
         self.controller_ctx.list_routines = self._list_routines
-        # PR 5.3: MemoryProactive (13 métodos de memoria/ánimo) vive en engine/.
-        self.controller_ctx.system_prompt = self.dialogue_director._system_prompt
         self.controller_ctx.autonomy = self.autonomy
         self.controller_ctx.audio = self.audio
         self.controller_ctx.episodic = getattr(self, "episodic", None)
@@ -408,20 +399,30 @@ class Controller(QObject):
         self.controller_ctx.last_user_text = ""
         self.controller_ctx.autonomy_busy = False
         self.controller_ctx.vision_busy = False
+        self.controller_ctx.wake_word_enabled = getattr(self, "_wake_word_enabled", True)
+        self.controller_ctx.autonomy_timer = self._autonomy_timer
+        # ---------- FASE 3 · DIRECTORES (cada uno publica sus canales en su __init__) ----------
+        # La visión de pantalla está disponible desde el inicio, pero no hace
+        # comentarios periódicos. Solo se usa para órdenes o peticiones explícitas.
+        self.vision_director = VisionDirector(self.controller_ctx)
+        # PR 5 paso 10: DialogueDirector (dueño del dialogo y canales de voz/status)
+        self.dialogue_director = DialogueDirector(self.controller_ctx)
+        # PR 5.3: MemoryProactive (13 métodos de memoria/ánimo) vive en engine/.
         self.memory_proactive = MemoryProactive(self.controller_ctx)
-        self.controller_ctx.memory_proactive = self.memory_proactive
+        # PR 5.4: PCDirector (~16 métodos del paquete PC) vive en engine/.
         self.pc_director = PCDirector(self.controller_ctx)
         self.teacher_director = TeacherDirector(self.controller_ctx)
         self.autonomy_director = AutonomyDirector(self.controller_ctx)
         self.emotion_orchestrator = EmotionOrchestrator(self.controller_ctx)
+        self.voice = VoiceDirector(self.controller_ctx)
+        # PR 5.11.2: ahora recibe el ctx (publica ctx.describe_audio).
+        self.media_director = MediaCompanionDirector(self.controller_ctx)
+        # ---------- FASE 4 · CANALES DEL MAESTRO (publica en el ctx lo que ya existe) ----------
+        self.controller_ctx.user_message = self.dialogue_director.on_user_message
+        self.controller_ctx.memory_proactive = self.memory_proactive
         # Canales de emoción (PR 5 paso 9): el orquestador publica avatar_emotion;
         # el maestro reengancha el latido AHORA que el orquestador ya existe, y
         # publica system_context (lo lee el VisionDirector: glance y checkin).
-        if getattr(self, "_state_timer", None) is not None:
-            self._state_timer.timeout.connect(self.emotion_orchestrator.state_tick)
-        if getattr(self, "_autonomy_timer", None) is not None:
-            self._autonomy_timer.timeout.connect(
-                self.autonomy_director.autonomous_create)
         self.controller_ctx.system_context = (
             lambda: self.emotion_orchestrator.refresh_bond())
         # Canales de composición (PR 5 paso 8): el AutonomyDirector se comunica
@@ -429,23 +430,26 @@ class Controller(QObject):
         self.controller_ctx.pc_director = self.pc_director
         self.controller_ctx.autonomy_director = self.autonomy_director
         self.controller_ctx.vision_director = self.vision_director
-        # PR 5 paso 10.2: canales del núcleo conversacional (dueño DialogueDirector)
+        # PR 5 paso 10.2: canales del núcleo conversacional (dueño DialogueDirector).
         self.controller_ctx.media_companion = self.media_companion
         self.controller_ctx.teacher_director = self.teacher_director
-        self.controller_ctx.wake_word_enabled = getattr(self, "_wake_word_enabled", True)
         self.controller_ctx.handle_command = self.dialogue_director.handle_command
-        self.controller_ctx.autonomy_timer = self._autonomy_timer
         # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
         self.controller_ctx.apply_mode_switch = self.teacher_director.apply_mode_switch
-        self.controller_ctx.ai_failed = self.dialogue_director._on_ai_failed
         self.controller_ctx.interrupt_response = self._interrupt_response
-        self.controller_ctx.glance = self._glance
+        self.controller_ctx.voice = self.voice
+        # PR 5.10.2: canal del director (creado aqui, tras media_director, no antes).
+        self.controller_ctx.media_director = self.media_director
+        # ---------- FASE 5 · WIRING: señales Qt, bridges y timers de interfaz ----------
+        if getattr(self, "_state_timer", None) is not None:
+            self._state_timer.timeout.connect(self.emotion_orchestrator.state_tick)
+        if getattr(self, "_autonomy_timer", None) is not None:
+            self._autonomy_timer.timeout.connect(
+                self.autonomy_director.autonomous_create)
         # Canal de confirmación verbal + bitácora: pc_control llama desde el
         # hilo del PCWorker; YUE pregunta por voz esperando un "sí/no".
         self.pc.set_confirm_callback(self.pc_director.pc_confirm_by_voice)
         self.pc.set_action_log_callback(self.pc_director.on_pc_action_log)
-        self.voice = VoiceDirector(self.controller_ctx)
-        self.controller_ctx.voice = self.voice
         self._checkin_timer = QTimer(self)
         self._checkin_timer.setInterval(
             max(30, int(getattr(config, "CHECKIN_CHECK_INTERVAL", 90))) * 1000
@@ -463,7 +467,7 @@ class Controller(QObject):
         self.pet.toggle_autonomy.connect(self.autonomy_director.toggle_autonomy)
         # Última observación estructurada de pantalla (ScreenObservation).
         self._last_screen_observation = None
-        self.pet.look_screen.connect(self._glance)
+        self.pet.look_screen.connect(self.vision_director.glance)
         self.speaker.speaking.connect(self.pet.set_talking)
         # NUEVO (lip-sync real): el envelope de amplitud del audio llega al
         # avatar para mover la boca con la voz real (con seno de respaldo).
@@ -483,10 +487,6 @@ class Controller(QObject):
         self.confirm_notify.connect(self.controller_ctx.say)
         # NUEVO: buffer de letra/diálogo oído mientras suena media, para que YUE
         # pueda comentar la canción/el vídeo con su contenido real.
-        # PR 5.11.2: ahora recibe el ctx (publica ctx.describe_audio).
-        self.media_director = MediaCompanionDirector(self.controller_ctx)
-        # PR 5.10.2: canal del director (creado aqui, tras media_director, no antes).
-        self.controller_ctx.media_director = self.media_director
         self.listener.media_heard.connect(self.media_director.remember_heard)
         self._camera_bridge.status.connect(self.vision_director.on_camera_status)
         self._camera_bridge.observation.connect(self.vision_director.on_camera_observation)
@@ -499,6 +499,8 @@ class Controller(QObject):
         # coordinador. Así ambos comparten exactamente el mismo antirrebote.
         self._audio_bridge.media_state.connect(self._on_media_state)
 
+        # ---------- FASE 6 · ARRANQUES REALES ----------
+        self.setup_camera()
         # NUEVO: sistema de MODOS. La personalidad de YUE no cambia; solo cambia
         # qué motor conversa. Companion es el modo por defecto (apoyo emocional) y
         # Teacher se activa/desactiva por voz o texto. Todo es aditivo y desacoplado.
@@ -623,11 +625,6 @@ class Controller(QObject):
 
 
     # ---------- mensajes ----------
-    # ---------- visión de pantalla ----------
-    # ---------- visión de pantalla (delegada al VisionDirector) ----------
-    def _glance(self, pregunta: str = ""):
-        self.vision_director.glance(pregunta=pregunta)
-
     # ---------- preflight de visión (al arrancar) ----------
     def _vision_preflight(self):
         self.vision_director.vision_preflight()

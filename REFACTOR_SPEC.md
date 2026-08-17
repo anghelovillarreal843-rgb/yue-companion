@@ -333,6 +333,33 @@ No es una regresión de ningún paso: el arranque real de la app es `python3 mai
 su `QApplication` en su orden interno y NO pasa por este camino. Si se toca algo en el arranque
 del `Controller` (orden de creación de directores, timers, audio), reproducir este patrón.
 
+**NOTA — deuda PR 6: retry no determinista del observador de cámara (hallazgo del paso 11.3):**
+en esta máquina (sin `/dev/video*`), `python3 main.py` LITERAL ya no termina: el observador
+entra en `retry` infinito buscando cámara (log `[camera] no disponible, reintentando...` en
+bucle). Demostrado con prueba A/B sobre el baseline del paso 11.2 (`git stash` + ejecución):
+el colgado es ambiental (falta de hardware), no una regresión de ningún paso; en los arranques
+11.1/11.2 ganaba la carrera el preflight y salía rc=0 en ~22-36s. Para la verificación manual
+de este PR usar SIEMPRE el patrón de §4.1 con los stubs, o máquina CON webcam. PR 6: acotar el
+retry (máximo de intentos o apagado tras timeout) ya que hoy es un bucle infinito sin salida.
+
+**NOTA — deuda PR 6: core dump con `CAMERA_INDEX=-1` (hallazgo del paso 11.3):** arrancar con
+`CAMERA_INDEX=-1` (índice inválido en vez de desactivar con `CAMERA_ENABLED=false`) produce
+core dump al abrir la cámara. PR 6: validar el valor, o tratar `-1` como "sin cámara" igual
+que el flag de desactivación, y documentarlo en el `.env.example`.
+
+**NOTA — deuda PR 6: comentario huérfano de `VISION_REPLACE_LEGACY` (observación del 11.4c):**
+el comentario «ADITIVO (migración, punto 16 del pedido)…» (main.py, justo antes de
+`def setup_camera`) queda colgado SIN código en el PR 5: el reemplazo real por adaptador
+(`CameraObserver` nuevo vs. clásico) vive hoy dentro de `VisionDirector.setup_camera`
+(ver docstring de `setup_camera` en main.py). PR 6: mover el comentario a su sitio real o
+eliminarlo.
+
+**NOTA — deuda PR 6: `_yue_say` ya no existe (observación del 11.4c):** la NOTA de `ctx.say`
+(§4.1) y el cable `_yue_say` de la lista original quedaron desactualizados: `_yue_say` fue
+eliminado del `Controller` en la limpieza del paso 10.x y `ctx.say` lo publica ahora el
+`DialogueDirector` en su `__init__` (engine/dialogue_director.py). PR 6: re-linealizar las
+referencias de línea de las NOTAs (varias apuntan a números del PR 5 que ya no coinciden).
+
 **NOTA — superficie duck-typed del `VisionHostAdapter` (PR 4, relevante para fila 5):**
 `VisionHostAdapter` (en `main.py`, PR 4) implementa formalmente `contracts.VisionHost`
 (`request_emotion`, `emotion_would_win`, `media_playing`, `is_speaking`) y REENVÍA por

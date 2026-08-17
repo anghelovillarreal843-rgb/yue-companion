@@ -45,6 +45,11 @@ class DialogueDirector:
         self.ctx.handle_command = self.handle_command
         self.ctx.say = self.say
         self.ctx.chat_set_status = self.set_status
+        # PUBLICACION (traspaso de dueño, NOTA §4.1): el prompt del sistema y
+        # el fallback de IA fallida también son del dueño del diálogo; el
+        # maestro ya no accede a sus privados (_system_prompt/_on_ai_failed).
+        self.ctx.system_prompt = self._system_prompt
+        self.ctx.ai_failed = self._on_ai_failed
 
     def say(self, text, user_context=None):
         # La emocion del avatar se infiere del texto CRUDO; el texto hablado va limpio.
