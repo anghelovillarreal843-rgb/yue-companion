@@ -434,7 +434,6 @@ class Controller(QObject):
         self.controller_ctx.teacher_director = self.teacher_director
         self.controller_ctx.wake_word_enabled = getattr(self, "_wake_word_enabled", True)
         self.controller_ctx.save_routine = self._save_routine
-        self.controller_ctx.describe_audio = self._describe_audio
         self.controller_ctx.handle_command = self.dialogue_director.handle_command
         self.controller_ctx.autonomy_timer = self._autonomy_timer
         # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
@@ -485,7 +484,8 @@ class Controller(QObject):
         self.confirm_notify.connect(self.controller_ctx.say)
         # NUEVO: buffer de letra/diálogo oído mientras suena media, para que YUE
         # pueda comentar la canción/el vídeo con su contenido real.
-        self.media_director = MediaCompanionDirector()
+        # PR 5.11.2: ahora recibe el ctx (publica ctx.describe_audio).
+        self.media_director = MediaCompanionDirector(self.controller_ctx)
         # PR 5.10.2: canal del director (creado aqui, tras media_director, no antes).
         self.controller_ctx.media_director = self.media_director
         self.listener.media_heard.connect(self.media_director.remember_heard)
@@ -632,85 +632,6 @@ class Controller(QObject):
     # ---------- preflight de visión (al arrancar) ----------
     def _vision_preflight(self):
         self.vision_director.vision_preflight()
-
-    def _describe_audio(self):
-        """Responde a «¿qué tal la música / qué escuchas / qué te pareció?» diciendo
-        qué suena (o sonaba hace un momento) y dando una impresión con la voz de YUE,
-        usando la letra/diálogo que captó. Nunca dice «no escucho nada» si de hecho
-        acaba de sonar algo."""
-        desc = ""
-        try:
-            desc = self.audio.describe() or ""
-        except Exception as exc:
-            print("[audio] describe() falló:", exc)
-        # 1) ¿Hay contenido AHORA? 2) Si no, ¿sonó algo hace poco?
-        prof = None
-        try:
-            prof = self.audio.media_profile()
-        except Exception:
-            prof = None
-        activo = bool(getattr(self.audio, "active", False))
-        ahora_suena = activo and prof is not None and getattr(prof, "media_type", "") in (
-            "video_musical", "video_normal",
-        )
-        reciente = None
-        edad = None
-        if not ahora_suena:
-            try:
-                reciente, edad = self.audio.recent_content(max_age=150.0)
-            except Exception:
-                reciente, edad = (None, None)
-
-        lyrics = self.media_director.recent_lyrics()
-
-        # Si no hay nada actual ni reciente NI letra captada, respondemos directo.
-        if not ahora_suena and reciente is None and not lyrics:
-            self.controller_ctx.say(desc or "Ahora mismo no distingo nada sonando en tu PC. "
-                                  "Si quieres que te diga qué tal, ponlo a sonar un momento.")
-            return
-
-        # Construimos el contexto para que YUE dé una impresión natural.
-        if ahora_suena:
-            percibo = desc or (prof.summary_es() if prof else "algo está sonando")
-            cuando = "Ahora mismo"
-        elif reciente is not None:
-            percibo = reciente.summary_es()
-            seg = int(edad or 0)
-            cuando = f"Hace unos {seg} segundos" if seg >= 3 else "Hace un momento"
-        else:
-            percibo = "algo estuvo sonando hace poco"
-            cuando = "Hace un momento"
-
-        contexto_letra = ""
-        if lyrics:
-            contexto_letra = (
-                "\nAlgo de lo que alcanzaste a oír (letra o diálogo, puede venir con "
-                f"errores de transcripción): «{lyrics}»."
-            )
-
-        current = self.emotion_orchestrator.refresh_bond()
-        system = self._system_prompt(current)
-        user = (
-            "El usuario te pregunta qué te pareció lo que suena (o acaba de sonar) en "
-            f"su computadora. {cuando} percibes esto de tu escucha del audio del "
-            f"sistema: «{percibo}».{contexto_letra}\n"
-            "Responde en español, en 1-3 frases, con tu personalidad. Da una impresión "
-            "natural: si es música, comenta el ambiente, la energía o de qué parece ir "
-            "por lo que oíste; si es un vídeo o peli, coméntalo. Puedes referirte a lo "
-            "que oíste, pero NO inventes título ni artista si no te consta. Nunca digas "
-            "que no puedes escuchar: sí puedes oír el audio del PC."
-        )
-        request_id = self._chat_request_id
-        self.chat.set_status("Yue está recordando lo que sonó…")
-        worker = AiWorker(self.engine, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ])
-        # Si el modelo falla, al menos decimos la clasificación (no «no escucho nada»).
-        respaldo = desc or (f"{cuando} sonaba {percibo}." if percibo else "")
-        worker.done.connect(lambda answer, rid=request_id: self._on_ai_done(rid, "¿qué tal la música?", answer))
-        worker.failed.connect(lambda _error, d=respaldo: (self.chat.set_status(""), self.controller_ctx.say(d)))
-        self.controller_ctx.workers.track(worker)
 
     def _on_audio_status(self, text, active):
         print(f"[audio] {'activo' if active else 'inactivo'}: {text}")
