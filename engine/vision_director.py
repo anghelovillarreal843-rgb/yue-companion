@@ -600,16 +600,16 @@ class VisionDirector:
                 encargo = (
                     "IMPORTANTE: por la cámara notas que la persona lleva un buen rato "
                     f"con una expresión de que algo va mal ({hint}). No es un gesto "
-                    "puntual, se ha mantenido. Con cariño y tu estilo (baja un poco el "
-                    "tono tsundere aquí, sin dramatizar), dile que la ves así y "
+                    "puntual, se ha mantenido. Con cariño y tu estilo (aquí baja el "
+                    "tono de broma y usa calidez, sin dramatizar), dile que la ves así y "
                     "pregúntale qué le pasa o si está bien. UNA o dos frases, natural, "
                     "en español mexicano. No inventes qué le pasó; solo pregunta."
                 )
             else:
                 encargo = (
                     f"Por la cámara acabas de notar que a la persona {hint}. "
-                    "Coméntaselo y pregúntale por qué está así, con tu estilo tsundere "
-                    "juguetón (te importa aunque lo disimules). UNA o dos frases como "
+                    "Coméntaselo y pregúntale por qué está así, con tu calidez de "
+                    "siempre (te importa de verdad). UNA o dos frases como "
                     "mucho, natural y en español mexicano. No inventes el motivo; solo "
                     "pregúntale."
                 )

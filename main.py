@@ -457,6 +457,8 @@ class Controller(QObject):
         self._checkin_timer.timeout.connect(self.memory_proactive.maybe_checkin)
 
         self.chat.send_message.connect(self.voice.on_text_message)
+        # NUEVO: boton de carga del chat (➤ -> spinner) = detener la respuesta.
+        self.chat.cancel_request.connect(self._interrupt_response)
         # NUEVO: arrastrar un PDF/documento al chat -> YUE lo lee en Modo Profesora.
         self.chat.files_dropped.connect(self.teacher_director.on_files_dropped)
         self.pet.clicked.connect(self.toggle_chat)
