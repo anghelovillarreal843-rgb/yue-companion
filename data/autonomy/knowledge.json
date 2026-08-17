@@ -1,7 +1,7 @@
 {
   "preferences": [],
   "patterns": {
-    "hola": 8,
+    "hola": 6,
     "te": 2,
     "como": 3,
     "porque": 3,
@@ -60,10 +60,9 @@
     "por": 1,
     "estoy": 1,
     "xd": 1,
-    "de": 1,
-    "yue": 1
+    "de": 1
   },
-  "updated": 1786818910.106835,
+  "updated": 1786247537.7811863,
   "checkin": {
     "last_ts": 1786225991.95765
   }
