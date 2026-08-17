@@ -360,6 +360,22 @@ eliminado del `Controller` en la limpieza del paso 10.x y `ctx.say` lo publica a
 `DialogueDirector` en su `__init__` (engine/dialogue_director.py). PR 6: re-linealizar las
 referencias de línea de las NOTAs (varias apuntan a números del PR 5 que ya no coinciden).
 
+**NOTA — deuda PR 6: re-exports temporales del maestro (FASE 4 del `__init__`):** quedan
+canales que `Controller` vuelve a publicar pese a que el dueño ya los publicó en su
+`__init__` (p.ej. `ctx.handle_command`, ya publicado por `DialogueDirector` en
+engine/dialogue_director.py:45; y puentes de referencia de objeto como `ctx.voice`,
+`ctx.teacher_director` o `ctx.memory_proactive`). No es funcional (el valor es el mismo
+objeto), es deuda estructural: PR 6, elegir un solo punto de publicación por canal y
+resolver los puentes de composición a través del canal del dueño.
+
+**NOTA — deuda PR 6: métodos del maestro con lógica real aún sin extraer (reporte 11.4c):**
+`_list_routines` (14 líneas, candidato: MemoryProactive/PCDirector), `vision_resumen`
+(9, candidato: VisionDirector), `setup_camera` (23, candidato: VisionDirector — ya delega
+el reenganche fino, PR 5.7) y `_media_companion_context` (13, callback de librería de
+`MediaCompanion`, opcional). El resto de métodos >5 líneas del Controller quedan en el
+maestro por diseño (§4.1): `_user_float`, `_interrupt_response`, `shutdown` y los
+handlers `_on_*` de señales Qt.
+
 **NOTA — superficie duck-typed del `VisionHostAdapter` (PR 4, relevante para fila 5):**
 `VisionHostAdapter` (en `main.py`, PR 4) implementa formalmente `contracts.VisionHost`
 (`request_emotion`, `emotion_would_win`, `media_playing`, `is_speaking`) y REENVÍA por
