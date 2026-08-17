@@ -296,6 +296,16 @@ en el MISMO paso que extrae al director, y no quedarse en `main.py` como cable d
 Así no se repite la sorpresa de descubrir sobre el terreno que una dependencia del
 `VisionDirector` cuelga todavía de `Controller`.
 
+**NOTA — canal `ctx.brain` (añadido en el PR 5 paso 10.2):** canal nuevo que expone el
+cerebro afectivo del host. Representa el `CompanionBrain` (`main.py:170-174`) que el
+`DialogueDirector` lee para el análisis afectivo v2 (`engine/dialogue_director.py:533,539`),
+con caída al camino clásico si no está disponible. Lo publica POR AHORA `Controller`
+(`main.py:389` → `self.controller_ctx.brain = self.brain`) como cable provisional del
+maestro; el traspaso de dueño real le corresponde a `DialogueDirector` (o a quien el
+paso 11 defina como dueño), con el mismo patrón que `ctx.camera` y `ctx.avatar_emotion`:
+al extraer al dueño, la publicación debe moverse de `main.py` a `engine/<director>.py`
+en el MISMO paso, y la nota de "X publica el canal" debe actualizarse.
+
 **NOTA — arranque real de `Controller()` fuera de pytest (regla del proyecto desde el
 incidente de `system_context`/`self.camera`):** el arranque manual verificado (usado en cada
 reporte del PR 5) es el MISMO patrón que `tests/test_humos.py::controller`:

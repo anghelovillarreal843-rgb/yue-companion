@@ -136,7 +136,7 @@ def test_humano_10_2_el_dialogo_publica_say_y_chat_set_status(controller, monkey
     monkeypatch.setattr(controller.listener, "set_tts_text", tts.append)
     # el chat de la UI es el real; solo capturamos reply para no abrir ventanas
     controller.controller_ctx.chat.show_reply = lambda t: mostrado.append(t)
-    controller.on_user_message("Hola, Yue.")
+    controller.controller_ctx.user_message("Hola, Yue.")
     import time
     for _ in range(20):
         if hablado:
