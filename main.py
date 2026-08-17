@@ -433,9 +433,7 @@ class Controller(QObject):
         self.controller_ctx.media_companion = self.media_companion
         self.controller_ctx.teacher_director = self.teacher_director
         self.controller_ctx.wake_word_enabled = getattr(self, "_wake_word_enabled", True)
-        self.controller_ctx.wellbeing_nudge_due = self._wellbeing_nudge_due
         self.controller_ctx.save_routine = self._save_routine
-        self.controller_ctx.show_activity = self._show_activity
         self.controller_ctx.describe_audio = self._describe_audio
         self.controller_ctx.handle_command = self.dialogue_director.handle_command
         self.controller_ctx.autonomy_timer = self._autonomy_timer
@@ -624,64 +622,6 @@ class Controller(QObject):
         # NUEVO: cualquier interrupción cancela un auto-avance de página pendiente.
         self.controller_ctx.teacher_autoadvance_pending = False
 
-
-    def _wellbeing_nudge_due(self) -> bool:
-        """¿Toca el recordatorio DISCRETO de apoyo humano/profesional?
-
-        Condiciones (cualquiera):
-          (1) el riesgo textual saltó varias veces en los últimos días, o
-          (2) uso muy intensivo: una sesión continua de más de X horas.
-        Se espacia con una ventana breve + cooldown persistente (state), para que
-        salga "de tanto en tanto" y no en cada mensaje. Se apaga por completo con
-        WELLBEING_NUDGE_ENABLED. A prueba de fallos: ante error, no añade nada.
-        """
-        if not bool(getattr(config, "WELLBEING_NUDGE_ENABLED", True)):
-            return False
-
-        condicion = False
-        # (1) riesgo textual repetido en la ventana reciente
-        try:
-            dias = int(getattr(config, "WELLBEING_RISK_DAYS", 7))
-            minimo = int(getattr(config, "WELLBEING_MIN_RISK_EVENTS", 2))
-            if self.memory.count_risk_events(dias) >= minimo:
-                condicion = True
-        except Exception:
-            pass
-        # (2) sesión continua muy larga
-        if not condicion:
-            try:
-                horas = float(getattr(config, "WELLBEING_SESSION_HOURS", 3.0))
-                gap = float(getattr(config, "WELLBEING_SESSION_GAP_MIN", 30.0)) * 60.0
-                if self.memory.session_span_seconds(max_gap=gap) >= horas * 3600.0:
-                    condicion = True
-            except Exception:
-                pass
-
-        if not condicion:
-            return False
-
-        # Espaciado con ventana + cooldown (marca persistente en 'state').
-        ahora = time.time()
-        try:
-            inicio = float(self.memory.get_state("wellbeing_nudge_ts", "0") or 0.0)
-        except Exception:
-            inicio = 0.0
-        ventana = float(getattr(config, "WELLBEING_NUDGE_WINDOW_MIN", 20.0)) * 60.0
-        cooldown = float(getattr(config, "WELLBEING_NUDGE_COOLDOWN_HOURS", 8.0)) * 3600.0
-
-        # Dentro de una ventana abierta: seguimos ofreciéndolo (varios turnos para
-        # que YUE lo suelte con naturalidad).
-        if inicio and (ahora - inicio) < ventana:
-            return True
-        # En cooldown tras la última ventana: silencio.
-        if inicio and (ahora - inicio) < cooldown:
-            return False
-        # Abrimos una ventana nueva.
-        try:
-            self.memory.set_state("wellbeing_nudge_ts", ahora)
-        except Exception:
-            pass
-        return True
 
     # ---------- mensajes ----------
     # ---------- visión de pantalla ----------
@@ -910,18 +850,6 @@ class Controller(QObject):
             f"{prefijo}Tienes {len(rutinas)} rutina{'s' if len(rutinas) != 1 else ''}: {nombres}. "
             "Di «ejecuta mi rutina» y el nombre para lanzarla."
         )
-
-    def _show_activity(self):
-        """«/actividad» o «mi actividad»: resumen legible de la última semana."""
-        resumen = ""
-        try:
-            resumen = self.memory.get_activity_summary(7)
-        except Exception as exc:
-            print("[actividad] no pude leer el resumen:", exc)
-        if resumen:
-            self.controller_ctx.say(resumen[0].upper() + resumen[1:])
-        else:
-            self.controller_ctx.say("Todavía no hay mucho en la bitácora de esta semana.")
 
     def _on_vision_status(self, text, active):
         """Estado del sistema de visión por cámara (llega en el hilo de la UI).

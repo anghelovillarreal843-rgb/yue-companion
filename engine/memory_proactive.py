@@ -43,6 +43,10 @@ class MemoryProactive:
         self._last_visual_risk_ask = 0.0
         self._episodic_lock = threading.Lock()
         self._story_lock = threading.Lock()
+        # PR 5 paso 11: dueños de los canales de bienestar y actividad. Antes los
+        # publicaba Controller; ahora los publica este director en su __init__.
+        self.ctx.wellbeing_nudge_due = self.wellbeing_nudge_due
+        self.ctx.show_activity = self.show_activity
 
     # ---------- señales sostenidas (cámara + ánimo) ----------
     def external_mood_signal(self) -> bool:
@@ -439,6 +443,84 @@ class MemoryProactive:
             self.ctx.say(pregunta)
         except Exception as exc:
             print("[checkin] fallo evaluando el check-in proactivo:", exc)
+
+    def wellbeing_nudge_due(self) -> bool:
+        """¿Toca el recordatorio DISCRETO de apoyo humano/profesional?
+
+        Condiciones (cualquiera):
+          (1) el riesgo textual saltó varias veces en los últimos días, o
+          (2) uso muy intensivo: una sesión continua de más de X horas.
+        Se espacia con una ventana breve + cooldown persistente (state), para que
+        salga "de tanto en tanto" y no en cada mensaje. Se apaga por completo con
+        WELLBEING_NUDGE_ENABLED. A prueba de fallos: ante error, no añade nada.
+
+        PR 5 paso 11: extraído de Controller (`_wellbeing_nudge_due`). Las
+        marcas de cooldown/ventana viven en el state PERSISTENTE de la memoria
+        (`wellbeing_nudge_ts`), no en atributos del host, así que el movimiento
+        no cambia el comportamiento: vuelve a funcionar igual entre arranques.
+        """
+        if not bool(_cfg("WELLBEING_NUDGE_ENABLED", True)):
+            return False
+
+        condicion = False
+        # (1) riesgo textual repetido en la ventana reciente
+        try:
+            dias = int(_cfg("WELLBEING_RISK_DAYS", 7))
+            minimo = int(_cfg("WELLBEING_MIN_RISK_EVENTS", 2))
+            if self.ctx.memory.count_risk_events(dias) >= minimo:
+                condicion = True
+        except Exception:
+            pass
+        # (2) sesión continua muy larga
+        if not condicion:
+            try:
+                horas = float(_cfg("WELLBEING_SESSION_HOURS", 3.0))
+                gap = float(_cfg("WELLBEING_SESSION_GAP_MIN", 30.0)) * 60.0
+                if self.ctx.memory.session_span_seconds(max_gap=gap) >= horas * 3600.0:
+                    condicion = True
+            except Exception:
+                pass
+
+        if not condicion:
+            return False
+
+        # Espaciado con ventana + cooldown (marca persistente en 'state').
+        ahora = time.time()
+        try:
+            inicio = float(self.ctx.memory.get_state("wellbeing_nudge_ts", "0") or 0.0)
+        except Exception:
+            inicio = 0.0
+        ventana = float(_cfg("WELLBEING_NUDGE_WINDOW_MIN", 20.0)) * 60.0
+        cooldown = float(_cfg("WELLBEING_NUDGE_COOLDOWN_HOURS", 8.0)) * 3600.0
+
+        # Dentro de una ventana abierta: seguimos ofreciéndolo (varios turnos para
+        # que YUE lo suelte con naturalidad).
+        if inicio and (ahora - inicio) < ventana:
+            return True
+        # En cooldown tras la última ventana: silencio.
+        if inicio and (ahora - inicio) < cooldown:
+            return False
+        # Abrimos una ventana nueva.
+        try:
+            self.ctx.memory.set_state("wellbeing_nudge_ts", ahora)
+        except Exception:
+            pass
+        return True
+
+    def show_activity(self):
+        """«/actividad» o «mi actividad»: resumen legible de la última semana.
+
+        PR 5 paso 11: extraído de Controller (`_show_activity`).
+        """
+        resumen = ""
+        try:
+            resumen = self.ctx.memory.get_activity_summary(7)
+        except Exception as exc:
+            print("[actividad] no pude leer el resumen:", exc)
+        if resumen:
+            self.ctx.say(resumen[0].upper() + resumen[1:])
+        else:
+            self.ctx.say("Todavía no hay mucho en la bitácora de esta semana.")
 
     # ---------- consolidación de memoria a largo plazo (al arrancar) ----------
     def schedule_memory_consolidation(self):
