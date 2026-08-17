@@ -1,11 +1,11 @@
 {
   "preferences": [],
   "patterns": {
-    "hola": 6,
+    "hola": 16,
     "te": 2,
     "como": 3,
     "porque": 3,
-    "que": 19,
+    "que": 23,
     "ponte": 1,
     "porfa": 1,
     "solo": 1,
@@ -24,7 +24,7 @@
     "gracias": 2,
     "así": 1,
     "dime": 1,
-    "en": 1,
+    "en": 3,
     "cual": 1,
     "sobre": 1,
     "file": 2,
@@ -47,7 +47,7 @@
     "mesitas": 1,
     "ah": 1,
     "puedes": 7,
-    "hol": 1,
+    "hol": 2,
     "oye": 1,
     "perfecto": 1,
     "confirmar": 1,
@@ -60,10 +60,13 @@
     "por": 1,
     "estoy": 1,
     "xd": 1,
-    "de": 1
+    "de": 1,
+    "non": 1,
+    "q": 2,
+    "g": 1
   },
-  "updated": 1786247537.7811863,
+  "updated": 1786975259.5503333,
   "checkin": {
-    "last_ts": 1786225991.95765
+    "last_ts": 1786975259.5300076
   }
 }
