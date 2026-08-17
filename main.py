@@ -433,7 +433,6 @@ class Controller(QObject):
         self.controller_ctx.media_companion = self.media_companion
         self.controller_ctx.teacher_director = self.teacher_director
         self.controller_ctx.wake_word_enabled = getattr(self, "_wake_word_enabled", True)
-        self.controller_ctx.save_routine = self._save_routine
         self.controller_ctx.handle_command = self.dialogue_director.handle_command
         self.controller_ctx.autonomy_timer = self._autonomy_timer
         # PR 5.6: hooks del cerebro central que usa el TeacherDirector.
@@ -732,31 +731,6 @@ class Controller(QObject):
         self.speaker.say(comment)
 
     # ---------- rutinas guardadas ----------
-    def _save_routine(self, nombre):
-        """«Guarda esto como rutina X»: guarda el último plan ejecutado."""
-        nombre = (nombre or "").strip()
-        if not nombre:
-            self.controller_ctx.say("Dime un nombre para la rutina, por ejemplo «guárdalo como rutina correo».")
-            return
-        rec = self.pc.last_executed
-        pasos = (rec or {}).get("actions") if rec else None
-        if not pasos:
-            self.controller_ctx.say(
-                "No tengo ninguna orden reciente que guardar. Pídeme primero que haga algo "
-                "y luego di «guarda esto como rutina» y el nombre."
-            )
-            return
-        try:
-            self.memory.add_routine(nombre, pasos)
-        except Exception as exc:
-            self.controller_ctx.say(f"No pude guardar la rutina: {exc}")
-            return
-        n = len(pasos)
-        self.controller_ctx.say(
-            f"Guardado como rutina «{nombre}» ({n} paso{'s' if n != 1 else ''}). "
-            f"Cuando quieras, solo di «ejecuta mi rutina {nombre}»."
-        )
-
     def _list_routines(self, prefijo=""):
         """«Mis rutinas»: lista las guardadas."""
         rutinas = self.memory.list_routines()

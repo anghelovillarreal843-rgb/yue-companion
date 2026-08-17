@@ -35,6 +35,9 @@ class PCDirector:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
         self._instruction = ""
+        # PR 5 paso 11.3: dueño del canal save_routine (antes _save_routine de
+        # Controller, misma familia que run_routine/list_routines).
+        self.ctx.save_routine = self.save_routine
 
     def on_pc_action_log(self, actions):
         """Recibe la bitácora desde PCWorker y la pinta en el hilo de Qt."""
@@ -210,6 +213,36 @@ class PCDirector:
         if not res.get("ran"):
             self.ctx.say(f"No pude ejecutar la rutina: {res.get('reason', 'algo salió mal')}.")
             return
+
+    def save_routine(self, nombre):
+        """«Guarda esto como rutina X»: guarda el último plan ejecutado.
+
+        PR 5 paso 11.3: extraído de Controller (`_save_routine`). Acceso por
+        ctx, mismo estilo que run_routine: `ctx.pc.last_executed` (el último
+        bloque ejecutado) y `ctx.memory.add_routine` (persistencia real).
+        """
+        nombre = (nombre or "").strip()
+        if not nombre:
+            self.ctx.say("Dime un nombre para la rutina, por ejemplo «guárdalo como rutina correo».")
+            return
+        rec = self.ctx.pc.last_executed
+        pasos = (rec or {}).get("actions") if rec else None
+        if not pasos:
+            self.ctx.say(
+                "No tengo ninguna orden reciente que guardar. Pídeme primero que haga algo "
+                "y luego di «guarda esto como rutina» y el nombre."
+            )
+            return
+        try:
+            self.ctx.memory.add_routine(nombre, pasos)
+        except Exception as exc:
+            self.ctx.say(f"No pude guardar la rutina: {exc}")
+            return
+        n = len(pasos)
+        self.ctx.say(
+            f"Guardado como rutina «{nombre}» ({n} paso{'s' if n != 1 else ''}). "
+            f"Cuando quieras, solo di «ejecuta mi rutina {nombre}»."
+        )
 
     def pc_confirm_by_voice(self, question: str) -> bool:
         """Pide confirmación por voz y ESPERA la respuesta (sí/no).
